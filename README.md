@@ -19,7 +19,7 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 - **Dual AI provider** — switch between Claude Code CLI and Vercel AI SDK at runtime, no restart needed
 - **Unified trading** — multi-account architecture supporting CCXT (Bybit, OKX, Binance, etc.) and Alpaca (US equities) with a git-like workflow (stage, commit, push)
 - **Guard pipeline** — extensible pre-execution safety checks (max position size, cooldown between trades, symbol whitelist)
-- **Market data** — OpenBB-powered equity, crypto, commodity, and currency data layers with unified symbol search (`marketSearchForResearch`) and technical indicator calculator
+- **Market data** — TypeScript-native OpenBB engine (`opentypebb`) with no external sidecar required. Covers equity, crypto, commodity, currency, and macro data with unified symbol search (`marketSearchForResearch`) and technical indicator calculator. Can also expose an embedded OpenBB-compatible HTTP API for external tools
 - **Equity research** — company profiles, financial statements, ratios, analyst estimates, earnings calendar, insider trading, and market movers (top gainers, losers, most active)
 - **News collector** — background RSS collection from configurable feeds with archive search tools (`globNews`/`grepNews`/`readNews`). Also captures OpenBB news API results via piggyback
 - **Cognitive state** — persistent "brain" with frontal lobe memory, emotion tracking, and commit history
@@ -166,7 +166,7 @@ All config lives in `data/config/` as JSON files with Zod validation. Missing fi
 | `crypto.json` | CCXT exchange config + API keys, allowed symbols, guards |
 | `securities.json` | Alpaca broker config + API keys, allowed symbols, guards |
 | `connectors.json` | Web/MCP server ports, Telegram bot credentials + enable, MCP Ask enable |
-| `openbb.json` | OpenBB API URL, per-asset-class data providers, provider API keys |
+| `openbb.json` | Data backend (`sdk` / `openbb`), per-asset-class providers, provider API keys, embedded HTTP server config |
 | `news-collector.json` | RSS feeds, fetch interval, retention period, OpenBB piggyback toggle |
 | `compaction.json` | Context window limits, auto-compaction thresholds |
 | `heartbeat.json` | Heartbeat enable/disable, interval, active hours |
@@ -212,12 +212,15 @@ src/
     brain/                   # Cognitive state (memory, emotion)
     browser/                 # Browser automation bridge (via OpenClaw)
   openbb/
-    equity/                  # OpenBB equity data layer (price, fundamentals, estimates, etc.)
-    crypto/                  # OpenBB crypto data layer
-    currency/                # OpenBB currency data layer
-    commodity/               # OpenBB commodity data layer (EIA, spot prices)
-    economy/                 # OpenBB macro economy data layer
-    news/                    # OpenBB news data layer
+    sdk/                     # In-process opentypebb SDK clients (equity, crypto, currency, news, economy, commodity)
+    api-server.ts            # Embedded OpenBB-compatible HTTP server (optional, port 6901)
+    equity/                  # Equity data layer + SymbolIndex (SEC/TMX local cache)
+    crypto/                  # Crypto data layer
+    currency/                # Currency/forex data layer
+    commodity/               # Commodity data layer (EIA, spot prices)
+    economy/                 # Macro economy data layer
+    news/                    # News data layer
+    credential-map.ts        # Maps config key names to OpenBB credential field names
   connectors/
     web/                     # Web UI chat (Hono, SSE push)
     telegram/                # Telegram bot (grammY, polling, commands)
