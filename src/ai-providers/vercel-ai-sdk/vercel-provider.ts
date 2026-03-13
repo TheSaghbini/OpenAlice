@@ -7,8 +7,7 @@
  */
 
 import type { ModelMessage, Tool } from 'ai'
-import type { ProviderResult, ProviderEvent } from '../../core/ai-provider.js'
-import type { GenerateProvider, GenerateInput, GenerateOpts } from '../../core/ai-provider.js'
+import type { ProviderResult, ProviderEvent, GenerateProvider, GenerateInput, GenerateOpts } from '../types.js'
 import type { Agent } from './agent.js'
 import type { MediaAttachment } from '../../core/types.js'
 import { extractMediaFromToolOutput } from '../../core/media.js'
