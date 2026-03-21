@@ -65,7 +65,7 @@ const LEGACY_GIT_PATHS: Record<string, string> = {
 const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
 const EMOTION_LOG_FILE = resolve('data/brain/emotion-log.md')
 const PERSONA_FILE = resolve('data/brain/persona.md')
-const PERSONA_DEFAULT = resolve('data/default/persona.default.md')
+const PERSONA_DEFAULT = resolve('default/persona.default.md')
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
