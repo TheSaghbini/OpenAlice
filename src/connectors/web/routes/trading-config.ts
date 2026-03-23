@@ -61,6 +61,8 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       badge: entry.badge,
       badgeColor: entry.badgeColor,
       fields: entry.configFields,
+      subtitleFields: entry.subtitleFields,
+      guardCategory: entry.guardCategory,
     }))
     return c.json({ brokerTypes })
   })

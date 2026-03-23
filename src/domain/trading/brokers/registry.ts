@@ -12,6 +12,20 @@ import { CcxtBroker } from './ccxt/CcxtBroker.js'
 import { AlpacaBroker } from './alpaca/AlpacaBroker.js'
 import { IbkrBroker } from './ibkr/IbkrBroker.js'
 
+// ==================== Subtitle field descriptor ====================
+
+export interface SubtitleField {
+  field: string
+  /** Text to show when boolean field is true */
+  label?: string
+  /** Text to show when boolean field is false (omitted = don't show) */
+  falseLabel?: string
+  /** Prefix before the value (e.g. "TWS ") */
+  prefix?: string
+}
+
+// ==================== Registry entry ====================
+
 export interface BrokerRegistryEntry {
   /** Zod schema for validating brokerConfig fields */
   configSchema: z.ZodType
@@ -27,7 +41,13 @@ export interface BrokerRegistryEntry {
   badge: string
   /** Tailwind badge color class */
   badgeColor: string
+  /** Fields to show in account card subtitle */
+  subtitleFields: SubtitleField[]
+  /** Guard category — determines which guard types are available */
+  guardCategory: 'crypto' | 'securities'
 }
+
+// ==================== Registry ====================
 
 export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
   ccxt: {
@@ -36,6 +56,12 @@ export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
     description: 'Unified API for 100+ crypto exchanges. Supports Binance, Bybit, OKX, Coinbase, and more.',
     badge: 'CC',
     badgeColor: 'text-accent',
+    subtitleFields: [
+      { field: 'exchange' },
+      { field: 'demoTrading', label: 'Demo' },
+      { field: 'sandbox', label: 'Sandbox' },
+    ],
+    guardCategory: 'crypto',
   },
   alpaca: {
     ...AlpacaBroker,
@@ -43,6 +69,10 @@ export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
     description: 'Commission-free US equities and ETFs with fractional share support.',
     badge: 'AL',
     badgeColor: 'text-green',
+    subtitleFields: [
+      { field: 'paper', label: 'Paper Trading', falseLabel: 'Live Trading' },
+    ],
+    guardCategory: 'securities',
   },
   ibkr: {
     ...IbkrBroker,
@@ -50,5 +80,10 @@ export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
     description: 'Professional-grade trading via TWS or IB Gateway. Stocks, options, futures, bonds.',
     badge: 'IB',
     badgeColor: 'text-orange-400',
+    subtitleFields: [
+      { field: 'host', prefix: 'TWS ' },
+      { field: 'port' },
+    ],
+    guardCategory: 'securities',
   },
 }
