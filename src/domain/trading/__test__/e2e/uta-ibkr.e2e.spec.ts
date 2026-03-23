@@ -136,6 +136,8 @@ describe('UTA — IBKR fill flow (AAPL)', () => {
     expect(aaplPos!.quantity.toNumber()).toBe(initialAaplQty + 1)
 
     // === Close 1 AAPL ===
+    // Wait for TWS to update positions after the buy fill
+    await new Promise(r => setTimeout(r, 3000))
     uta.stageClosePosition({ aliceId, qty: 1 })
     uta.commit('e2e: close 1 AAPL')
     const closePush = await uta.push()

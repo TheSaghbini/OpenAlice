@@ -216,27 +216,26 @@ export class IbkrBroker implements IBroker {
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
     const symbol = resolveSymbol(contract)
-    if (!symbol) {
-      return { success: false, error: 'Cannot resolve contract symbol' }
-    }
 
     // Find current position to determine side
     const positions = await this.getPositions()
     const pos = positions.find(p =>
       (contract.conId && p.contract.conId === contract.conId) ||
-      resolveSymbol(p.contract) === symbol,
+      (symbol && resolveSymbol(p.contract) === symbol),
     )
     if (!pos) {
-      return { success: false, error: `No position for ${symbol}` }
+      return { success: false, error: `No position for ${symbol ?? `conId=${contract.conId}`}` }
     }
 
+    // Use the position's contract for the close order — it has full routing info from TWS
+    const closeContract = pos.contract
     const order = new Order()
     order.action = pos.side === 'long' ? 'SELL' : 'BUY'
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
     order.tif = 'DAY'
 
-    return this.placeOrder(contract, order)
+    return this.placeOrder(closeContract, order)
   }
 
   // ==================== Queries ====================
