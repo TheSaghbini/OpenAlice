@@ -16,7 +16,10 @@ import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import type { CronFirePayload } from './engine.js'
-import { HEARTBEAT_JOB_NAME } from '../heartbeat/heartbeat.js'
+/** Internal jobs (prefixed with __) have dedicated handlers and should not be routed to the AI. */
+function isInternalJob(name: string): boolean {
+  return name.startsWith('__') && name.endsWith('__')
+}
 
 // ==================== Types ====================
 
@@ -45,8 +48,8 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   async function handleFire(entry: EventLogEntry): Promise<void> {
     const payload = entry.payload as CronFirePayload
 
-    // Guard: heartbeat events are handled by the heartbeat listener
-    if (payload.jobName === HEARTBEAT_JOB_NAME) return
+    // Guard: internal jobs (__heartbeat__, __snapshot__, etc.) have dedicated handlers
+    if (isInternalJob(payload.jobName)) return
 
     // Guard: skip if already processing (serial execution)
     if (processing) {
