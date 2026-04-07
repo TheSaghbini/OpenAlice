@@ -73,7 +73,8 @@ export class CodexProvider implements AIProvider {
       const response = await client.responses.create({
         model,
         instructions,
-        input: prompt,
+        input: [{ role: 'user' as const, content: prompt }],
+        store: false,
       })
 
       const text = response.output
@@ -145,6 +146,7 @@ export class CodexProvider implements AIProvider {
           instructions,
           input,
           tools: tools.length > 0 ? tools : undefined,
+          store: false, // Required by ChatGPT subscription endpoint
         })
 
         for await (const event of stream) {
@@ -168,15 +170,26 @@ export class CodexProvider implements AIProvider {
           yield { type: 'done', result: { text: errorText, media: [] } }
           return
         }
-        logger.error({
-          err: err?.message,
+        // Extract all available error detail from OpenAI SDK error
+        const errDetail: Record<string, unknown> = {
+          message: err?.message,
           status: err?.status,
-          headers: err?.headers,
-          body: err?.error ?? err?.body,
-          model,
-          inputItems: input.length,
-          toolCount: tools.length,
-        }, 'responses_api_error')
+          type: err?.type,
+          code: err?.code,
+          param: err?.param,
+        }
+        // The SDK stores the parsed error body in err.error
+        if (err?.error) errDetail.errorBody = err.error
+        // Raw response headers can help debug
+        if (err?.headers) {
+          const h: Record<string, string> = {}
+          try { for (const [k, v] of Object.entries(err.headers)) h[k] = String(v) } catch {}
+          if (Object.keys(h).length > 0) errDetail.headers = h
+        }
+        errDetail.model = model
+        errDetail.inputItems = input.length
+        errDetail.toolCount = tools.length
+        logger.error(errDetail, 'responses_api_error')
         const errorText = accumulatedText + stepText +
           `\n\n[Codex API error: ${err?.message ?? 'unknown error'}]`
         yield { type: 'done', result: { text: errorText, media: [] } }
