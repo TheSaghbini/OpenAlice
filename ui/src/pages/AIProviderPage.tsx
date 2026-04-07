@@ -49,19 +49,21 @@ function detectCustomMode(provider: string, model: string): boolean {
   return !presets.some((p) => p.value === model)
 }
 
-/** UI-level backend. 'openai' is a facade over vercel-ai-sdk with provider=openai. */
-type UIBackend = 'agent-sdk' | 'openai' | 'vercel-ai-sdk'
+/** UI-level backend selector. */
+type UIBackend = 'agent-sdk' | 'codex' | 'vercel-ai-sdk'
 
 /** Default provider/model per UI backend — applied on every switch to avoid stale config. */
 const BACKEND_DEFAULTS: Record<UIBackend, { backend: string; provider: string; model: string }> = {
   'agent-sdk':    { backend: 'agent-sdk',    provider: 'anthropic', model: 'claude-sonnet-4-6' },
-  'openai':       { backend: 'vercel-ai-sdk', provider: 'openai',   model: PROVIDER_MODELS.openai[0].value },
+  'codex':        { backend: 'codex',        provider: 'openai',   model: 'gpt-5.4' },
   'vercel-ai-sdk': { backend: 'vercel-ai-sdk', provider: 'anthropic', model: PROVIDER_MODELS.anthropic[0].value },
 }
 
 /** Derive initial UI backend from config. */
 function detectUIBackend(config: AIProviderConfig): UIBackend {
-  if (config.backend === 'vercel-ai-sdk' && config.provider === 'openai') return 'openai'
+  if (config.backend === 'codex') return 'codex'
+  // Legacy: openai via vercel-ai-sdk → migrate to codex
+  if (config.backend === 'vercel-ai-sdk' && config.provider === 'openai') return 'codex'
   if (config.backend === 'vercel-ai-sdk') return 'vercel-ai-sdk'
   return 'agent-sdk'
 }
@@ -133,11 +135,11 @@ export function AIProviderPage() {
                   description="Claude Code login or Anthropic API key"
                 />
                 <BackendCard
-                  selected={uiBackend === 'openai'}
-                  onClick={() => handleBackendSwitch('openai')}
-                  icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></svg>}
-                  title="OpenAI"
-                  description="GPT models via OpenAI API"
+                  selected={uiBackend === 'codex'}
+                  onClick={() => handleBackendSwitch('codex')}
+                  icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /><line x1="14" y1="4" x2="10" y2="20" /></svg>}
+                  title="OpenAI / Codex"
+                  description="ChatGPT subscription or OpenAI API key"
                 />
                 <BackendCard
                   selected={uiBackend === 'vercel-ai-sdk'}
@@ -156,17 +158,17 @@ export function AIProviderPage() {
               </ConfigSection>
             )}
 
-            {/* OpenAI simplified form */}
-            {uiBackend === 'openai' && (
-              <ConfigSection title="Model" description="Select a model and enter your OpenAI API key.">
-                <OpenAIForm aiProvider={config.aiProvider} />
-              </ConfigSection>
-            )}
-
             {/* Full model form (only for Vercel AI SDK) */}
             {uiBackend === 'vercel-ai-sdk' && (
               <ConfigSection title="Model" description="Provider, model, and API keys. Changes take effect on the next request.">
                 <ModelForm aiProvider={config.aiProvider} />
+              </ConfigSection>
+            )}
+
+            {/* Codex auth + model form */}
+            {uiBackend === 'codex' && (
+              <ConfigSection title="Authentication" description="Choose how Alice connects to OpenAI / Codex models.">
+                <CodexAuthForm aiProvider={config.aiProvider} onUpdate={(patch) => setConfig((c) => c ? { ...c, aiProvider: { ...c.aiProvider, ...patch } } : c)} />
               </ConfigSection>
             )}
           </div>
@@ -560,6 +562,91 @@ function ModelForm({ aiProvider }: { aiProvider: AIProviderConfig }) {
 }
 
 // ==================== Agent SDK Auth Form ====================
+
+const CODEX_LOGIN_METHODS: { value: LoginMethod; label: string; subtitle: string; hint: string }[] = [
+  { value: 'codex-oauth', label: 'ChatGPT Subscription', subtitle: 'Use your ChatGPT plan', hint: 'Requires local Codex CLI login (run codex login in terminal). Usage billed to your ChatGPT subscription.' },
+  { value: 'api-key', label: 'API Key', subtitle: 'Pay per token', hint: 'Enter your OpenAI API key below. Billed per token to your API account.' },
+]
+
+function CodexAuthForm({ aiProvider, onUpdate }: { aiProvider: AIProviderConfig; onUpdate: (patch: Partial<AIProviderConfig>) => void }) {
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>(aiProvider.loginMethod ?? 'codex-oauth')
+  const [apiKey, setApiKey] = useState('')
+  const [keySaveStatus, setKeySaveStatus] = useState<SaveStatus>('idle')
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current) }, [])
+
+  const handleLoginMethodChange = async (method: LoginMethod) => {
+    setLoginMethod(method)
+    try {
+      await api.config.updateSection('aiProvider', { ...aiProvider, loginMethod: method })
+      onUpdate({ loginMethod: method })
+    } catch { setLoginMethod(loginMethod) }
+  }
+
+  const handleSaveKey = async () => {
+    if (!apiKey) return
+    setKeySaveStatus('saving')
+    try {
+      const updatedKeys = { ...aiProvider.apiKeys, openai: apiKey }
+      await api.config.updateSection('aiProvider', { ...aiProvider, apiKeys: updatedKeys })
+      onUpdate({ apiKeys: updatedKeys })
+      setApiKey('')
+      setKeySaveStatus('saved')
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setKeySaveStatus('idle'), 2000)
+    } catch { setKeySaveStatus('error') }
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        {CODEX_LOGIN_METHODS.map((m) => (
+          <BackendCard
+            key={m.value}
+            selected={loginMethod === m.value}
+            onClick={() => handleLoginMethodChange(m.value)}
+            icon={m.value === 'codex-oauth'
+              ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" /></svg>
+              : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>}
+            title={m.label}
+            description={m.subtitle}
+          />
+        ))}
+      </div>
+      <p className="text-[11px] text-text-muted mt-2">
+        {CODEX_LOGIN_METHODS.find((m) => m.value === loginMethod)?.hint}
+      </p>
+
+      {loginMethod === 'api-key' && (
+        <Field label="OpenAI API Key">
+          <div className="relative">
+            <input
+              className={inputClass}
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={aiProvider.apiKeys?.openai ? '(configured)' : 'sk-...'}
+            />
+            {aiProvider.apiKeys?.openai && (
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-green">active</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={handleSaveKey}
+              disabled={!apiKey || keySaveStatus === 'saving'}
+              className="btn-primary"
+            >
+              Save Key
+            </button>
+            <SaveIndicator status={keySaveStatus} onRetry={handleSaveKey} />
+          </div>
+        </Field>
+      )}
+    </>
+  )
+}
 
 function AgentSdkAuthForm({ aiProvider, onUpdate }: { aiProvider: AIProviderConfig; onUpdate: (patch: Partial<AIProviderConfig>) => void }) {
   const [loginMethod, setLoginMethod] = useState<LoginMethod>(aiProvider.loginMethod ?? 'api-key')

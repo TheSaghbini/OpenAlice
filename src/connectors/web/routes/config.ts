@@ -23,8 +23,8 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
     try {
       const body = await c.req.json<{ backend?: string }>()
       const backend = body.backend
-      if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk' && backend !== 'agent-sdk') {
-        return c.json({ error: 'Invalid backend. Must be "claude-code", "vercel-ai-sdk", or "agent-sdk".' }, 400)
+      if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk' && backend !== 'agent-sdk' && backend !== 'codex') {
+        return c.json({ error: 'Invalid backend. Must be "claude-code", "vercel-ai-sdk", "agent-sdk", or "codex".' }, 400)
       }
       await writeAIBackend(backend as AIBackend)
       return c.json({ backend })

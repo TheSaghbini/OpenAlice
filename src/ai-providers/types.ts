@@ -32,7 +32,7 @@ export interface GenerateOpts {
   disabledTools?: string[]
   vercelAiSdk?: { provider: string; model: string; baseUrl?: string; apiKey?: string }
   agentSdk?: { model?: string; apiKey?: string; baseUrl?: string }
-  codex?: { model?: string; baseUrl?: string }
+  codex?: { model?: string; baseUrl?: string; apiKey?: string; loginMethod?: 'api-key' | 'codex-oauth' }
 }
 
 // ==================== AIProvider ====================

@@ -13,7 +13,7 @@ const engineSchema = z.object({
   port: z.number().int().positive().default(3000),
 })
 
-const loginMethodSchema = z.enum(['api-key', 'claudeai'])
+const loginMethodSchema = z.enum(['api-key', 'claudeai', 'codex-oauth'])
 
 export const aiProviderSchema = z.object({
   backend: z.enum(['claude-code', 'vercel-ai-sdk', 'agent-sdk', 'codex']).default('claude-code'),
@@ -195,6 +195,8 @@ export const agentSdkOverrideSchema = z.object({
 export const codexOverrideSchema = z.object({
   model: z.string().optional(),
   baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+  loginMethod: z.enum(['api-key', 'codex-oauth']).optional(),
 })
 
 export const webSubchannelSchema = z.object({

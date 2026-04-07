@@ -1,13 +1,14 @@
 import { headers } from './client'
-import type { WebChannel, VercelAiSdkOverride, AgentSdkOverride } from './types'
+import type { WebChannel, VercelAiSdkOverride, AgentSdkOverride, CodexOverride } from './types'
 
 export interface ChannelListItem {
   id: string
   label: string
   systemPrompt?: string
-  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
+  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk' | 'codex'
   vercelAiSdk?: VercelAiSdkOverride
   agentSdk?: AgentSdkOverride
+  codex?: CodexOverride
   disabledTools?: string[]
 }
 

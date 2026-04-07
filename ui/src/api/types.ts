@@ -7,7 +7,7 @@ export interface VercelAiSdkOverride {
   apiKey?: string
 }
 
-export type LoginMethod = 'api-key' | 'claudeai'
+export type LoginMethod = 'api-key' | 'claudeai' | 'codex-oauth'
 
 export interface AgentSdkOverride {
   model?: string
@@ -16,13 +16,21 @@ export interface AgentSdkOverride {
   loginMethod?: LoginMethod
 }
 
+export interface CodexOverride {
+  model?: string
+  baseUrl?: string
+  apiKey?: string
+  loginMethod?: 'api-key' | 'codex-oauth'
+}
+
 export interface WebChannel {
   id: string
   label: string
   systemPrompt?: string
-  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
+  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk' | 'codex'
   vercelAiSdk?: VercelAiSdkOverride
   agentSdk?: AgentSdkOverride
+  codex?: CodexOverride
   disabledTools?: string[]
 }
 

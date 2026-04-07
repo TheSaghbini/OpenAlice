@@ -31,8 +31,15 @@ export function ChannelConfigModal({ channel, onClose, onSaved }: ChannelConfigM
   const [aApiKey, setAApiKey] = useState(channel.agentSdk?.apiKey ?? '')
   const [aLoginMethod, setALoginMethod] = useState<LoginMethod | ''>(channel.agentSdk?.loginMethod ?? '')
 
+  // Codex override state
+  const [cModel, setCModel] = useState(channel.codex?.model ?? '')
+  const [cBaseUrl, setCBaseUrl] = useState(channel.codex?.baseUrl ?? '')
+  const [cApiKey, setCApiKey] = useState(channel.codex?.apiKey ?? '')
+  const [cLoginMethod, setCLoginMethod] = useState<'api-key' | 'codex-oauth' | ''>(channel.codex?.loginMethod ?? '')
+
   const showVercelConfig = provider === 'vercel-ai-sdk'
   const showAgentSdkConfig = provider === 'agent-sdk'
+  const showCodexConfig = provider === 'codex'
 
   useEffect(() => {
     api.tools.load().then(({ inventory }) => setTools(inventory)).catch(() => {})
@@ -60,12 +67,22 @@ export function ChannelConfigModal({ channel, onClose, onSaved }: ChannelConfigM
           }
         : undefined
 
+      const codex = showCodexConfig && (cModel || cLoginMethod)
+        ? {
+            ...(cModel ? { model: cModel } : {}),
+            ...(cBaseUrl ? { baseUrl: cBaseUrl } : {}),
+            ...(cApiKey ? { apiKey: cApiKey } : {}),
+            ...(cLoginMethod ? { loginMethod: cLoginMethod as 'api-key' | 'codex-oauth' } : {}),
+          }
+        : undefined
+
       const { channel: updated } = await api.channels.update(channel.id, {
         label: label.trim() || channel.label,
         systemPrompt: systemPrompt.trim() || undefined,
-        provider: (provider as 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk') || undefined,
+        provider: (provider as 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk' | 'codex') || undefined,
         vercelAiSdk: vercelAiSdk ?? (null as unknown as undefined),
         agentSdk: agentSdk ?? (null as unknown as undefined),
+        codex: codex ?? (null as unknown as undefined),
         disabledTools: disabledTools.size > 0 ? [...disabledTools] : undefined,
       })
       onSaved(updated)
@@ -151,6 +168,7 @@ export function ChannelConfigModal({ channel, onClose, onSaved }: ChannelConfigM
               <option value="">Default (global)</option>
               <option value="agent-sdk">Claude</option>
               <option value="vercel-ai-sdk">Vercel AI SDK</option>
+              <option value="codex">Codex</option>
             </select>
           </div>
 
@@ -261,6 +279,59 @@ export function ChannelConfigModal({ channel, onClose, onSaved }: ChannelConfigM
                   value={aApiKey}
                   onChange={(e) => setAApiKey(e.target.value)}
                   placeholder="sk-ant-..."
+                  className={inputClass}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Codex config — only when provider is codex */}
+          {showCodexConfig && (
+            <div className="rounded-lg border border-border/50 bg-bg-secondary/30 p-3 space-y-3">
+              <p className="text-xs font-medium text-text-muted">Codex Override</p>
+
+              <div>
+                <label className="block text-xs text-text-muted/70 mb-1">Login Method</label>
+                <select
+                  value={cLoginMethod}
+                  onChange={(e) => setCLoginMethod((e.target.value || '') as 'api-key' | 'codex-oauth' | '')}
+                  className={inputClass}
+                >
+                  <option value="">Default (global)</option>
+                  <option value="codex-oauth">ChatGPT Subscription</option>
+                  <option value="api-key">API Key</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-text-muted/70 mb-1">Model</label>
+                <input
+                  type="text"
+                  value={cModel}
+                  onChange={(e) => setCModel(e.target.value)}
+                  placeholder="e.g. gpt-5.4"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-text-muted/70 mb-1">Base URL <span className="text-text-muted/40">(optional)</span></label>
+                <input
+                  type="text"
+                  value={cBaseUrl}
+                  onChange={(e) => setCBaseUrl(e.target.value)}
+                  placeholder="Leave empty for default"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-text-muted/70 mb-1">API Key <span className="text-text-muted/40">(optional, overrides global)</span></label>
+                <input
+                  type="password"
+                  value={cApiKey}
+                  onChange={(e) => setCApiKey(e.target.value)}
+                  placeholder="sk-..."
                   className={inputClass}
                 />
               </div>

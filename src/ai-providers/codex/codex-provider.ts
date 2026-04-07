@@ -25,8 +25,9 @@ const logger = pino({
   transport: { target: 'pino/file', options: { destination: 'logs/codex.log', mkdir: true } },
 })
 
-const DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex'
-const DEFAULT_MODEL = 'codex-mini-latest'
+const DEFAULT_OAUTH_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+const DEFAULT_API_BASE_URL = 'https://api.openai.com/v1'
+const DEFAULT_MODEL = 'gpt-5.4'
 
 // ==================== Provider ====================
 
@@ -38,19 +39,30 @@ export class CodexProvider implements AIProvider {
     private getSystemPrompt: () => Promise<string>,
   ) {}
 
-  /** Create an OpenAI client with the current access token. */
+  /**
+   * Create an OpenAI client.
+   *
+   * - loginMethod 'codex-oauth' (default): reads ~/.codex/auth.json, hits
+   *   ChatGPT subscription endpoint. Usage billed to ChatGPT plan.
+   * - loginMethod 'api-key': uses apiKeys.openai from config (or override).
+   *   Standard OpenAI API billing, or compatible third-party endpoint.
+   */
   private async createClient(opts?: GenerateOpts): Promise<{ client: OpenAI; model: string }> {
-    const token = await getAccessToken()
     const aiConfig = await readAIProviderConfig()
-    const baseURL = opts?.codex?.baseUrl ?? DEFAULT_BASE_URL
     const model = opts?.codex?.model ?? aiConfig.model ?? DEFAULT_MODEL
+    const loginMethod = opts?.codex?.loginMethod ?? aiConfig.loginMethod ?? 'codex-oauth'
 
-    const client = new OpenAI({
-      apiKey: token,
-      baseURL,
-    })
+    if (loginMethod === 'api-key') {
+      const apiKey = opts?.codex?.apiKey ?? aiConfig.apiKeys.openai
+      if (!apiKey) throw new Error('Codex api-key mode requires apiKeys.openai in config.')
+      const baseURL = opts?.codex?.baseUrl ?? aiConfig.baseUrl ?? DEFAULT_API_BASE_URL
+      return { client: new OpenAI({ apiKey, baseURL }), model }
+    }
 
-    return { client, model }
+    // OAuth mode
+    const token = await getAccessToken()
+    const baseURL = opts?.codex?.baseUrl ?? DEFAULT_OAUTH_BASE_URL
+    return { client: new OpenAI({ apiKey: token, baseURL }), model }
   }
 
   async ask(prompt: string): Promise<ProviderResult> {

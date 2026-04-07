@@ -136,6 +136,8 @@ export interface AskOptions {
   codex?: {
     model?: string
     baseUrl?: string
+    apiKey?: string
+    loginMethod?: 'api-key' | 'codex-oauth'
   }
 }
 
