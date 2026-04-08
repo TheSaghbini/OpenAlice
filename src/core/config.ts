@@ -422,6 +422,33 @@ export async function loadConfig(): Promise<Config> {
     await removeJsonFile('api-keys.json')
   }
 
+  // ---------- Migration: distribute global apiKeys into profiles ----------
+  const aiConfigAfterMigration = raws[6] as Record<string, unknown> | undefined
+  if (aiConfigAfterMigration && 'apiKeys' in aiConfigAfterMigration && 'profiles' in aiConfigAfterMigration) {
+    const keys = aiConfigAfterMigration.apiKeys as Record<string, string> | undefined
+    const profiles = aiConfigAfterMigration.profiles as Record<string, Record<string, unknown>>
+    if (keys && Object.values(keys).some(Boolean)) {
+      let changed = false
+      for (const profile of Object.values(profiles)) {
+        if (profile.apiKey) continue // already has a key, don't overwrite
+        const vendor = profile.backend === 'codex' ? 'openai'
+          : profile.backend === 'agent-sdk' ? 'anthropic'
+          : (profile.provider as string) ?? 'anthropic'
+        const globalKey = keys[vendor]
+        if (globalKey) {
+          profile.apiKey = globalKey
+          changed = true
+        }
+      }
+      if (changed) {
+        delete aiConfigAfterMigration.apiKeys
+        raws[6] = aiConfigAfterMigration
+        await mkdir(CONFIG_DIR, { recursive: true })
+        await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(aiConfigAfterMigration, null, 2) + '\n')
+      }
+    }
+  }
+
   // ---------- Migration: consolidate old telegram.json + engine port fields ----------
   const connectorsRaw = raws[9] as Record<string, unknown> | undefined
   if (connectorsRaw === undefined) {
@@ -567,19 +594,13 @@ export interface ResolvedProfile {
   provider?: string
 }
 
-/** Resolve a profile by slug, filling in global apiKey fallback. */
+/** Resolve a profile by slug. API key comes from the profile directly. */
 export async function resolveProfile(slug?: string): Promise<ResolvedProfile> {
   const config = await readAIProviderConfig()
   const key = slug ?? config.activeProfile
   const profile = config.profiles[key]
   if (!profile) throw new Error(`Unknown AI provider profile: "${key}"`)
-  const vendor = profile.backend === 'codex' ? 'openai'
-    : profile.backend === 'agent-sdk' ? 'anthropic'
-    : (profile as { provider?: string }).provider ?? 'anthropic'
-  return {
-    ...profile,
-    apiKey: profile.apiKey ?? (config.apiKeys as Record<string, string | undefined>)[vendor],
-  }
+  return { ...profile }
 }
 
 /** Get the active profile slug. */
@@ -610,14 +631,6 @@ export async function deleteProfile(slug: string): Promise<void> {
   const config = await readAIProviderConfig()
   if (config.activeProfile === slug) throw new Error('Cannot delete the active profile')
   delete config.profiles[slug]
-  await mkdir(CONFIG_DIR, { recursive: true })
-  await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(config, null, 2) + '\n')
-}
-
-/** Update global API keys. */
-export async function writeApiKeys(keys: { anthropic?: string; openai?: string; google?: string }): Promise<void> {
-  const config = await readAIProviderConfig()
-  config.apiKeys = { ...config.apiKeys, ...keys }
   await mkdir(CONFIG_DIR, { recursive: true })
   await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(config, null, 2) + '\n')
 }

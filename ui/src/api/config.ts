@@ -81,20 +81,4 @@ export const configApi = {
     }
   },
 
-  // ==================== API Keys ====================
-
-  async updateApiKeys(keys: { anthropic?: string; openai?: string; google?: string }): Promise<void> {
-    const res = await fetch('/api/config/api-keys', {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(keys),
-    })
-    if (!res.ok) throw new Error('Failed to update API keys')
-  },
-
-  async getApiKeysStatus(): Promise<{ anthropic: boolean; openai: boolean; google: boolean }> {
-    const res = await fetch('/api/config/api-keys/status')
-    if (!res.ok) throw new Error('Failed to load API key status')
-    return res.json()
-  },
 }

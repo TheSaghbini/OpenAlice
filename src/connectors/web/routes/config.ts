@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import {
   loadConfig, writeConfigSection, readAIProviderConfig, validSections,
-  writeProfile, deleteProfile, setActiveProfile, writeApiKeys,
+  writeProfile, deleteProfile, setActiveProfile,
   profileSchema, type ConfigSection, type Profile,
 } from '../../../core/config.js'
 import type { EngineContext } from '../../../core/types.js'
@@ -96,34 +96,10 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
     }
   })
 
-  // ==================== API Keys ====================
-
-  /** PUT /api-keys — update global API keys */
-  app.put('/api-keys', async (c) => {
-    try {
-      const body = await c.req.json<{ anthropic?: string; openai?: string; google?: string }>()
-      await writeApiKeys(body)
-      return c.json({ success: true })
-    } catch (err) {
-      return c.json({ error: String(err) }, 500)
-    }
-  })
+  // ==================== Presets ====================
 
   /** GET /presets — built-in preset templates for profile creation */
   app.get('/presets', (c) => c.json({ presets: BUILTIN_PRESETS }))
-
-  app.get('/api-keys/status', async (c) => {
-    try {
-      const config = await readAIProviderConfig()
-      return c.json({
-        anthropic: !!config.apiKeys.anthropic,
-        openai: !!config.apiKeys.openai,
-        google: !!config.apiKeys.google,
-      })
-    } catch (err) {
-      return c.json({ error: String(err) }, 500)
-    }
-  })
 
   // ==================== Generic Section Writer ====================
 
