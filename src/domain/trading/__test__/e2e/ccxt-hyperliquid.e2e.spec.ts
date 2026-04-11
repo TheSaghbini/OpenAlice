@@ -131,7 +131,7 @@ describe('CcxtBroker — Hyperliquid e2e', () => {
     const result = await b().closePosition(btcPerp.contract, new Decimal('0.001'))
     expect(result.success, `closePosition failed: ${result.error}`).toBe(true)
     console.log(`  close orderId=${result.orderId}, success=${result.success}`)
-  }, 15_000)
+  }, 60_000)
 
   it('queries order by ID after place', async ({ skip }) => {
     const matches = await b().searchContracts('BTC')
@@ -158,5 +158,5 @@ describe('CcxtBroker — Hyperliquid e2e', () => {
 
     // Clean up
     await b().closePosition(btcPerp.contract, new Decimal('0.001'))
-  }, 30_000)
+  }, 60_000)
 })

@@ -18,6 +18,7 @@
 
 import type { Exchange, Order as CcxtOrder } from 'ccxt'
 import { bybitOverrides } from './exchanges/bybit.js'
+import { hyperliquidOverrides } from './exchanges/hyperliquid.js'
 
 // ==================== Override interface ====================
 
@@ -26,6 +27,17 @@ export interface CcxtExchangeOverrides {
   fetchOrderById?(exchange: Exchange, orderId: string, symbol: string): Promise<CcxtOrder>
   /** Cancel an order by ID (regular + conditional). */
   cancelOrderById?(exchange: Exchange, orderId: string, symbol?: string): Promise<void>
+  /** Place an order via ccxt.createOrder. Override when an exchange needs custom prep
+   *  (e.g. hyperliquid market orders require a reference price for slippage bounds). */
+  placeOrder?(
+    exchange: Exchange,
+    symbol: string,
+    type: string,
+    side: 'buy' | 'sell',
+    amount: number,
+    price: number | undefined,
+    params: Record<string, unknown>,
+  ): Promise<CcxtOrder>
 }
 
 // ==================== Default implementations ====================
@@ -57,8 +69,22 @@ export async function defaultCancelOrderById(exchange: Exchange, orderId: string
   }
 }
 
+/** Default: pass straight through to ccxt.createOrder. Works for bybit, binance, alpaca-via-ccxt, etc. */
+export async function defaultPlaceOrder(
+  exchange: Exchange,
+  symbol: string,
+  type: string,
+  side: 'buy' | 'sell',
+  amount: number,
+  price: number | undefined,
+  params: Record<string, unknown>,
+): Promise<CcxtOrder> {
+  return await exchange.createOrder(symbol, type, side, amount, price, params)
+}
+
 // ==================== Registry ====================
 
 export const exchangeOverrides: Record<string, CcxtExchangeOverrides> = {
   bybit: bybitOverrides,
+  hyperliquid: hyperliquidOverrides,
 }

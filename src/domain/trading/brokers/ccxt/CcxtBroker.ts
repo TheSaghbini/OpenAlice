@@ -39,6 +39,7 @@ import {
   exchangeOverrides,
   defaultFetchOrderById,
   defaultCancelOrderById,
+  defaultPlaceOrder,
 } from './overrides.js'
 
 const STABLECOIN_TO_USD = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD'])
@@ -364,13 +365,18 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
+      const refPrice = ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE
+        ? order.lmtPrice
+        : undefined
 
-      const ccxtOrder = await this.exchange.createOrder(
+      const place = this.overrides.placeOrder ?? defaultPlaceOrder
+      const ccxtOrder = await place(
+        this.exchange,
         ccxtSymbol,
         ccxtOrderType,
         side,
         parseFloat(size),
-        ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : undefined,
+        refPrice,
         params,
       )
 
