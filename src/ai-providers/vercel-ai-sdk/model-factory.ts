@@ -68,7 +68,8 @@ export async function createModelFromProfile(profile: ResolvedProfile): Promise<
     case 'ollama': {
       const { createOpenAI } = await import('@ai-sdk/openai')
       const client = createOpenAI({ apiKey: apiKey || OLLAMA_DUMMY_API_KEY, baseURL: resolvedUrl })
-      return { model: client(m), key }
+      // @ai-warning Ollama only supports Chat Completions API — .chat() not .responses() (the default)
+      return { model: client.chat(m), key }
     }
     default:
       throw new Error(`Unsupported model provider: "${p}". Supported: anthropic, openai, google, ollama`)

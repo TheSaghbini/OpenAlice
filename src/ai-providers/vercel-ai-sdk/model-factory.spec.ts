@@ -7,9 +7,10 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockCreateOpenAI, mockOpenAIModel } = vi.hoisted(() => ({
+const { mockCreateOpenAI, mockOpenAIModel, mockChatModel } = vi.hoisted(() => ({
   mockCreateOpenAI: vi.fn(),
   mockOpenAIModel: vi.fn(),
+  mockChatModel: vi.fn(),
 }))
 
 vi.mock('@ai-sdk/openai', () => ({
@@ -21,12 +22,13 @@ import { createModelFromProfile } from './model-factory.js'
 describe('createModelFromProfile', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockOpenAIModel.chat = mockChatModel
     mockCreateOpenAI.mockReturnValue(mockOpenAIModel)
   })
 
   it('should create an Ollama model with the local OpenAI-compatible defaults', async () => {
     const model = { provider: 'ollama-model' }
-    mockOpenAIModel.mockReturnValue(model)
+    mockChatModel.mockReturnValue(model)
 
     const result = await createModelFromProfile({
       backend: 'vercel-ai-sdk',
@@ -38,7 +40,8 @@ describe('createModelFromProfile', () => {
       apiKey: 'ollama',
       baseURL: 'http://localhost:11434/v1',
     })
-    expect(mockOpenAIModel).toHaveBeenCalledWith('llama3.2')
+    expect(mockChatModel).toHaveBeenCalledWith('llama3.2')
+    expect(mockOpenAIModel).not.toHaveBeenCalled()
     expect(result).toEqual({
       model,
       key: 'ollama:llama3.2:http://localhost:11434/v1',
@@ -47,7 +50,7 @@ describe('createModelFromProfile', () => {
 
   it('should normalize a scheme-less Ollama host to an HTTP `/v1` endpoint', async () => {
     const model = { provider: 'ollama-model' }
-    mockOpenAIModel.mockReturnValue(model)
+    mockChatModel.mockReturnValue(model)
 
     const result = await createModelFromProfile({
       backend: 'vercel-ai-sdk',
@@ -60,11 +63,12 @@ describe('createModelFromProfile', () => {
       apiKey: 'ollama',
       baseURL: 'http://localhost:11434/v1',
     })
+    expect(mockChatModel).toHaveBeenCalledWith('qwen3:8b')
     expect(result.key).toBe('ollama:qwen3:8b:http://localhost:11434/v1')
   })
 
   it('should append `/v1` when an Ollama base URL omits it', async () => {
-    mockOpenAIModel.mockReturnValue({ provider: 'ollama-model' })
+    mockChatModel.mockReturnValue({ provider: 'ollama-model' })
 
     await createModelFromProfile({
       backend: 'vercel-ai-sdk',
@@ -77,11 +81,12 @@ describe('createModelFromProfile', () => {
       apiKey: 'ollama',
       baseURL: 'http://127.0.0.1:11434/v1',
     })
+    expect(mockChatModel).toHaveBeenCalledWith('qwen3:8b')
   })
 
   it('should preserve an explicit Ollama key and an already-correct `/v1` path', async () => {
     const model = { provider: 'ollama-model' }
-    mockOpenAIModel.mockReturnValue(model)
+    mockChatModel.mockReturnValue(model)
 
     const result = await createModelFromProfile({
       backend: 'vercel-ai-sdk',
@@ -95,6 +100,8 @@ describe('createModelFromProfile', () => {
       apiKey: 'secret-key',
       baseURL: 'https://ollama.example.com/proxy/v1',
     })
+    expect(mockChatModel).toHaveBeenCalledWith('deepseek-r1:8b')
+    expect(mockOpenAIModel).not.toHaveBeenCalled()
     expect(result).toEqual({
       model,
       key: 'ollama:deepseek-r1:8b:https://ollama.example.com/proxy/v1',
