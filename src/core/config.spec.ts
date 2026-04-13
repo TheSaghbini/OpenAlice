@@ -5,7 +5,7 @@
  * Tests cover: hot-read helpers, writeConfigSection, writeAIBackend,
  * loadTradingConfig (both new-format and legacy-migration paths).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock fs/promises BEFORE importing config
 vi.mock('fs/promises', () => ({
@@ -13,6 +13,11 @@ vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   mkdir: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
+}))
+
+// Mock pino to avoid file I/O from logger
+vi.mock('pino', () => ({
+  pino: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
@@ -394,5 +399,88 @@ describe('profileSchema', () => {
 
   it('rejects unknown backend', () => {
     expect(() => profileSchema.parse({ backend: 'unknown', label: 'X', model: 'y' })).toThrow()
+  })
+})
+
+// ==================== OLLAMA_BASE_URL env override ====================
+
+describe('OLLAMA_BASE_URL env override', () => {
+  const originalEnv = { ...process.env }
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  it('readAIProviderConfig injects ollama profile when OLLAMA_BASE_URL is set', async () => {
+    process.env.OLLAMA_BASE_URL = 'http://ollama.railway.internal:11434'
+    fileReturns({
+      profiles: { default: { backend: 'agent-sdk', model: 'claude-sonnet-4-6', loginMethod: 'claudeai' } },
+      activeProfile: 'default',
+    })
+    const cfg = await readAIProviderConfig()
+    expect(cfg.activeProfile).toBe('ollama')
+    expect(cfg.profiles.ollama).toBeDefined()
+    expect(cfg.profiles.ollama.backend).toBe('vercel-ai-sdk')
+    if (cfg.profiles.ollama.backend === 'vercel-ai-sdk') {
+      expect(cfg.profiles.ollama.provider).toBe('ollama')
+      expect(cfg.profiles.ollama.baseUrl).toBe('http://ollama.railway.internal:11434')
+      expect(cfg.profiles.ollama.model).toBe('llama3.2')
+    }
+  })
+
+  it('uses OLLAMA_MODEL when provided', async () => {
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434'
+    process.env.OLLAMA_MODEL = 'mistral'
+    fileReturns({
+      profiles: { default: { backend: 'agent-sdk', model: 'claude-sonnet-4-6', loginMethod: 'claudeai' } },
+      activeProfile: 'default',
+    })
+    const cfg = await readAIProviderConfig()
+    expect(cfg.profiles.ollama.model).toBe('mistral')
+  })
+
+  it('preserves existing profiles when injecting ollama', async () => {
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434'
+    fileReturns({
+      profiles: {
+        default: { backend: 'agent-sdk', model: 'claude-sonnet-4-6', loginMethod: 'claudeai' },
+        gpt: { backend: 'codex', model: 'gpt-5.4', loginMethod: 'codex-oauth' },
+      },
+      activeProfile: 'default',
+    })
+    const cfg = await readAIProviderConfig()
+    expect(cfg.profiles.default).toBeDefined()
+    expect(cfg.profiles.gpt).toBeDefined()
+    expect(cfg.profiles.ollama).toBeDefined()
+    expect(cfg.activeProfile).toBe('ollama')
+  })
+
+  it('does not inject ollama profile when OLLAMA_BASE_URL is not set', async () => {
+    delete process.env.OLLAMA_BASE_URL
+    fileReturns({
+      profiles: { default: { backend: 'agent-sdk', model: 'claude-sonnet-4-6', loginMethod: 'claudeai' } },
+      activeProfile: 'default',
+    })
+    const cfg = await readAIProviderConfig()
+    expect(cfg.activeProfile).toBe('default')
+    expect(cfg.profiles.ollama).toBeUndefined()
+  })
+
+  it('loadConfig() with OLLAMA_BASE_URL produces an active ollama profile', async () => {
+    process.env.OLLAMA_BASE_URL = 'http://ollama.railway.internal:11434'
+    // loadConfig reads 12 config files — return ENOENT for all
+    mockReadFile.mockImplementation(async () => {
+      const err = new Error('ENOENT: no such file') as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    })
+    const config = await loadConfig()
+    expect(config.aiProvider.activeProfile).toBe('ollama')
+    expect(config.aiProvider.profiles.ollama).toBeDefined()
+    expect(config.aiProvider.profiles.ollama.backend).toBe('vercel-ai-sdk')
+    if (config.aiProvider.profiles.ollama.backend === 'vercel-ai-sdk') {
+      expect(config.aiProvider.profiles.ollama.provider).toBe('ollama')
+      expect(config.aiProvider.profiles.ollama.baseUrl).toBe('http://ollama.railway.internal:11434')
+    }
   })
 })

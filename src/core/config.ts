@@ -1,7 +1,12 @@
 import { z } from 'zod'
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { resolve } from 'path'
+import { pino } from 'pino'
 import { newsCollectorSchema } from '../domain/news/config.js'
+
+const logger = pino({
+  transport: { target: 'pino/file', options: { destination: 'logs/engine.log', mkdir: true } },
+})
 
 const CONFIG_DIR = resolve('data/config')
 
@@ -320,6 +325,40 @@ async function parseAndSeed<T>(filename: string, schema: z.ZodType<T>, raw: unkn
   return parsed
 }
 
+/** @ai-context Apply OLLAMA_BASE_URL / OLLAMA_MODEL env overrides to AI provider config. */
+function applyOllamaEnvOverride(config: AIProviderConfig): AIProviderConfig {
+  const baseUrl = process.env.OLLAMA_BASE_URL
+  if (!baseUrl) return config
+
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    throw new Error(`Invalid OLLAMA_BASE_URL: "${baseUrl}" — must be a valid URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid OLLAMA_BASE_URL scheme: "${parsed.protocol}" — only http: and https: are allowed`)
+  }
+
+  if (config.profiles.ollama) {
+    logger.warn({ existingProfile: config.profiles.ollama }, 'OLLAMA_BASE_URL env override is replacing existing "ollama" profile')
+  }
+
+  const model = process.env.OLLAMA_MODEL ?? 'llama3.2'
+  const ollamaProfile: Profile = {
+    preset: 'ollama',
+    backend: 'vercel-ai-sdk',
+    provider: 'ollama',
+    model,
+    baseUrl,
+  }
+  return {
+    ...config,
+    profiles: { ...config.profiles, ollama: ollamaProfile },
+    activeProfile: 'ollama',
+  }
+}
+
 export async function loadConfig(): Promise<Config> {
   const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'heartbeat.json', 'snapshot.json', 'connectors.json', 'news.json', 'tools.json'] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
@@ -490,7 +529,7 @@ export async function loadConfig(): Promise<Config> {
     securities:    await parseAndSeed(files[3], securitiesSchema, raws[3]),
     marketData:    await parseAndSeed(files[4], marketDataSchema, raws[4]),
     compaction:    await parseAndSeed(files[5], compactionSchema, raws[5]),
-    aiProvider:    await parseAndSeed(files[6], aiProviderSchema, raws[6]),
+    aiProvider:    applyOllamaEnvOverride(await parseAndSeed(files[6], aiProviderSchema, raws[6])),
     heartbeat:     await parseAndSeed(files[7], heartbeatSchema, raws[7]),
     snapshot:      await parseAndSeed(files[8], snapshotSchema, raws[8]),
     connectors:    await parseAndSeed(files[9], connectorsSchema, raws[9]),
@@ -558,9 +597,9 @@ export async function readAgentConfig() {
 export async function readAIProviderConfig() {
   try {
     const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), 'utf-8'))
-    return aiProviderSchema.parse(raw)
+    return applyOllamaEnvOverride(aiProviderSchema.parse(raw))
   } catch {
-    return aiProviderSchema.parse({})
+    return applyOllamaEnvOverride(aiProviderSchema.parse({}))
   }
 }
 
