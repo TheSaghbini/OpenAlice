@@ -148,3 +148,58 @@ describe('VercelAIProvider — generate() events', () => {
     expect(call.system).toBe('custom prompt')
   })
 })
+
+// ==================== tool result sanitization ====================
+
+describe('VercelAIProvider — tool result sanitization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockCreateModelFromProfile.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockGenerateText.mockResolvedValue({ text: 'ok', steps: [] } as any)
+  })
+
+  it('JSON-round-trips tool execute results to strip class instances', async () => {
+    // Simulate a Decimal-like class that would fail structuredClone
+    class FakeDecimal {
+      private value: string
+      constructor(v: string) { this.value = v }
+      toJSON() { return this.value }
+      toString() { return this.value }
+    }
+
+    const fakeTool = {
+      description: 'test tool',
+      execute: vi.fn().mockResolvedValue({
+        balance: new FakeDecimal('12345.67'),
+        nested: { qty: new FakeDecimal('100') },
+        plain: 'hello',
+      }),
+    }
+
+    const getTools = async () => ({ testTool: fakeTool as any })
+    const provider = new VercelAIProvider(getTools, async () => 'sys', 5)
+    await provider.ask('test')
+
+    // The tools passed to generateText should have wrapped execute
+    const call = mockGenerateText.mock.calls[0][0]
+    const wrappedTool = call.tools!.testTool as any
+    const result = await wrappedTool.execute({})
+
+    // FakeDecimal.toJSON() returns the string value, so JSON.parse(JSON.stringify(...)) gives plain strings
+    expect(result).toEqual({ balance: '12345.67', nested: { qty: '100' }, plain: 'hello' })
+    // structuredClone should work on the sanitized result
+    expect(() => structuredClone(result)).not.toThrow()
+  })
+
+  it('preserves tools without execute', async () => {
+    const toolWithoutExecute = { description: 'no-exec tool' }
+
+    const getTools = async () => ({ noExec: toolWithoutExecute as any })
+    const provider = new VercelAIProvider(getTools, async () => 'sys', 5)
+    await provider.ask('test')
+
+    const call = mockGenerateText.mock.calls[0][0]
+    expect(call.tools!.noExec).toHaveProperty('description', 'no-exec tool')
+    expect((call.tools!.noExec as any).execute).toBeUndefined()
+  })
+})

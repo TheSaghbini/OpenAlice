@@ -17,6 +17,30 @@ import { createModelFromProfile } from './model-factory.js'
 import { generateText, stepCountIs } from './agent.js'
 import { createChannel } from '../../core/async-channel.js'
 
+/**
+ * Wrap every tool's execute so its return value is JSON-round-tripped.
+ * This converts class instances (Decimal, etc.) to plain JSON-safe objects,
+ * preventing DataCloneError from structuredClone in Vercel AI SDK v6.
+ */
+function sanitizeToolResults(tools: Record<string, Tool>): Record<string, Tool> {
+  const wrapped: Record<string, Tool> = {}
+  for (const [name, t] of Object.entries(tools)) {
+    if (!t.execute) {
+      wrapped[name] = t
+      continue
+    }
+    const originalExecute = t.execute
+    wrapped[name] = {
+      ...t,
+      execute: async (...args: Parameters<NonNullable<Tool['execute']>>) => {
+        const result = await originalExecute(...args)
+        return JSON.parse(JSON.stringify(result))
+      },
+    }
+  }
+  return wrapped
+}
+
 export class VercelAIProvider implements AIProvider {
   readonly providerTag = 'vercel-ai' as const
 
@@ -36,9 +60,14 @@ export class VercelAIProvider implements AIProvider {
       this.getInstructions(),
     ])
 
-    const tools = disabledTools?.length
+    const filtered = disabledTools?.length
       ? Object.fromEntries(Object.entries(allTools).filter(([name]) => !new Set(disabledTools).has(name)))
       : allTools
+
+    // @ai-warning Vercel AI SDK v6 calls structuredClone() on tool results.
+    // Class instances (e.g. Decimal from decimal.js) cause DataCloneError.
+    // JSON-round-trip strips methods/prototypes so results are plain objects.
+    const tools = sanitizeToolResults(filtered)
 
     return { model, tools, instructions }
   }
