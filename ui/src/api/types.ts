@@ -88,7 +88,7 @@ export type ChatHistoryItem =
 // ==================== Config ====================
 
 export interface AIProviderConfig {
-  apiKeys: { anthropic?: string; openai?: string; google?: string }
+  apiKeys: { anthropic?: string; openai?: string; google?: string; ollama?: string }
   profiles: Record<string, Profile>
   activeProfile: string
 }

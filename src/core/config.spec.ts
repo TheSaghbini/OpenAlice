@@ -22,6 +22,7 @@ import {
   readToolsConfig,
   readAgentConfig,
   readMarketDataConfig,
+  loadConfig,
   writeConfigSection,
   readAccountsConfig,
   writeAccountsConfig,
@@ -265,6 +266,97 @@ describe('aiProviderSchema (profile-based)', () => {
       activeProfile: 'test',
     })).not.toThrow()
   })
+
+  it('preserves ollama api keys for migration compatibility', () => {
+    const result = aiProviderSchema.parse({
+      apiKeys: { ollama: 'proxy-key' },
+    })
+
+    expect(result.apiKeys.ollama).toBe('proxy-key')
+  })
+})
+
+describe('loadConfig', () => {
+  it('preserves unrelated global api keys when migrating an ollama profile', async () => {
+    mockReadFile.mockImplementation(async (filePath) => {
+      const path = String(filePath)
+      if (path.endsWith('ai-provider-manager.json')) {
+        return JSON.stringify({
+          apiKeys: { ollama: 'proxy-key', openai: 'sk-openai' },
+          profiles: {
+            local: {
+              backend: 'vercel-ai-sdk',
+              label: 'Local Ollama',
+              provider: 'ollama',
+              model: 'llama3.2',
+            },
+          },
+          activeProfile: 'local',
+        }) as any
+      }
+
+      const err = new Error('ENOENT: no such file') as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    })
+
+    const config = await loadConfig()
+    const profile = config.aiProvider.profiles.local
+    expect(config.aiProvider.apiKeys.openai).toBe('sk-openai')
+
+    expect(profile.backend).toBe('vercel-ai-sdk')
+    if (profile.backend === 'vercel-ai-sdk') {
+      expect(profile.provider).toBe('ollama')
+      expect(profile.apiKey).toBe('proxy-key')
+    }
+
+    const aiProviderWrite = mockWriteFile.mock.calls.find(([filePath]) => String(filePath).endsWith('ai-provider-manager.json'))
+    expect(aiProviderWrite).toBeDefined()
+
+    const written = JSON.parse(aiProviderWrite![1] as string)
+    expect(written.apiKeys).toEqual({ openai: 'sk-openai' })
+    expect(written.profiles.local.apiKey).toBe('proxy-key')
+  })
+
+  it('removes migrated api keys when no global credentials remain', async () => {
+    mockReadFile.mockImplementation(async (filePath) => {
+      const path = String(filePath)
+      if (path.endsWith('ai-provider-manager.json')) {
+        return JSON.stringify({
+          apiKeys: { ollama: 'proxy-key' },
+          profiles: {
+            local: {
+              backend: 'vercel-ai-sdk',
+              label: 'Local Ollama',
+              provider: 'ollama',
+              model: 'llama3.2',
+            },
+          },
+          activeProfile: 'local',
+        }) as any
+      }
+
+      const err = new Error('ENOENT: no such file') as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    })
+
+    const config = await loadConfig()
+    const profile = config.aiProvider.profiles.local
+
+    expect(profile.backend).toBe('vercel-ai-sdk')
+    if (profile.backend === 'vercel-ai-sdk') {
+      expect(profile.provider).toBe('ollama')
+      expect(profile.apiKey).toBe('proxy-key')
+    }
+
+    const aiProviderWrite = mockWriteFile.mock.calls.find(([filePath]) => String(filePath).endsWith('ai-provider-manager.json'))
+    expect(aiProviderWrite).toBeDefined()
+
+    const written = JSON.parse(aiProviderWrite![1] as string)
+    expect(written.apiKeys).toBeUndefined()
+    expect(written.profiles.local.apiKey).toBe('proxy-key')
+  })
 })
 
 describe('profileSchema', () => {
@@ -282,6 +374,22 @@ describe('profileSchema', () => {
   it('validates vercel profile', () => {
     const result = profileSchema.parse({ backend: 'vercel-ai-sdk', label: 'Gemini', provider: 'google', model: 'gemini-2.5-flash' })
     expect(result.backend).toBe('vercel-ai-sdk')
+  })
+
+  it('validates vercel ollama profile', () => {
+    const result = profileSchema.parse({
+      backend: 'vercel-ai-sdk',
+      label: 'Ollama',
+      provider: 'ollama',
+      model: 'llama3.2',
+      baseUrl: 'http://localhost:11434',
+    })
+
+    expect(result.backend).toBe('vercel-ai-sdk')
+    if (result.backend === 'vercel-ai-sdk') {
+      expect(result.provider).toBe('ollama')
+      expect(result.baseUrl).toBe('http://localhost:11434')
+    }
   })
 
   it('rejects unknown backend', () => {

@@ -28,6 +28,7 @@ export const aiProviderLegacySchema = z.object({
     anthropic: z.string().optional(),
     openai: z.string().optional(),
     google: z.string().optional(),
+    ollama: z.string().optional(),
   }).default({}),
 })
 
@@ -35,10 +36,12 @@ export const aiProviderLegacySchema = z.object({
 
 export type AIBackend = 'agent-sdk' | 'codex' | 'vercel-ai-sdk'
 
+/** @ai-context Keep provider-scoped keys available for migration compatibility, including authenticated Ollama deployments. */
 const apiKeysSchema = z.object({
   anthropic: z.string().optional(),
   openai: z.string().optional(),
   google: z.string().optional(),
+  ollama: z.string().optional(),
 })
 
 const baseProfileFields = {
@@ -430,6 +433,7 @@ export async function loadConfig(): Promise<Config> {
     const profiles = aiConfigAfterMigration.profiles as Record<string, Record<string, unknown>>
     if (keys && Object.values(keys).some(Boolean)) {
       let changed = false
+      const migratedVendors = new Set<string>()
       for (const profile of Object.values(profiles)) {
         if (profile.apiKey) continue // already has a key, don't overwrite
         const vendor = profile.backend === 'codex' ? 'openai'
@@ -438,11 +442,19 @@ export async function loadConfig(): Promise<Config> {
         const globalKey = keys[vendor]
         if (globalKey) {
           profile.apiKey = globalKey
+          migratedVendors.add(vendor)
           changed = true
         }
       }
       if (changed) {
-        delete aiConfigAfterMigration.apiKeys
+        const remainingKeys = Object.fromEntries(
+          Object.entries(keys).filter(([vendor, value]) => value && !migratedVendors.has(vendor))
+        )
+        if (Object.keys(remainingKeys).length > 0) {
+          aiConfigAfterMigration.apiKeys = remainingKeys
+        } else {
+          delete aiConfigAfterMigration.apiKeys
+        }
         raws[6] = aiConfigAfterMigration
         await mkdir(CONFIG_DIR, { recursive: true })
         await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(aiConfigAfterMigration, null, 2) + '\n')

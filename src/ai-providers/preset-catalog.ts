@@ -132,6 +132,25 @@ export const GEMINI: PresetDef = {
   writeOnlyFields: ['apiKey'],
 }
 
+// ==================== Third-party: Ollama ====================
+
+export const OLLAMA: PresetDef = {
+  id: 'ollama',
+  label: 'Ollama',
+  description: 'Local or self-hosted Ollama via its OpenAI-compatible API',
+  category: 'third-party',
+  defaultName: 'Ollama',
+  hint: 'Default endpoint is http://localhost:11434/v1. Run `ollama serve` and pull a model first if needed.',
+  zodSchema: z.object({
+    backend: z.literal('vercel-ai-sdk'),
+    provider: z.literal('ollama'),
+    model: z.string().default('llama3.2').describe('Model'),
+    baseUrl: z.string().default('http://localhost:11434/v1').describe('Ollama API endpoint'),
+    apiKey: z.string().optional().describe('API key (optional for local Ollama)'),
+  }),
+  writeOnlyFields: ['apiKey'],
+}
+
 // ==================== Third-party: MiniMax ====================
 
 export const MINIMAX: PresetDef = {
@@ -181,6 +200,7 @@ export const PRESET_CATALOG: PresetDef[] = [
   CODEX_OAUTH,
   CODEX_API,
   GEMINI,
+  OLLAMA,
   MINIMAX,
   CUSTOM,
 ]
