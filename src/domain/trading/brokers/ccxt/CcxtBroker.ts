@@ -205,34 +205,73 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       // Use the exchange's own default types (set in its CCXT class describe()).
       // Skip 'option' type — option markets are typically thousands of contracts
       // (Bybit alone has ~10k+) and rarely useful for automated trading.
-      const allTypes = (fmOpts['types'] ?? []) as string[]
-      const types = allTypes.length > 0
-        ? allTypes.filter(t => t !== 'option')
-        : ['spot', 'linear', 'inverse'] // fallback for exchanges that don't declare types
+      const declaredTypes = (fmOpts['types'] ?? []) as string[]
+      const types = declaredTypes.length > 0
+        ? declaredTypes.filter(t => t !== 'option')
+        : [] // exchange doesn't declare types — call once without per-type iteration
 
       const allMarkets: unknown[] = []
-      for (const type of types) {
+
+      if (types.length === 0) {
+        // Exchange doesn't declare fetchMarkets.types (e.g. Crypto.com).
+        // Call once — per-type iteration would triple-fetch identical results.
         for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
           try {
-            const prevTypes = fmOpts['types']
-            fmOpts['types'] = [type]
             const markets = await origFetchMarkets(params)
-            fmOpts['types'] = prevTypes
             allMarkets.push(...markets)
             break
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err)
             if (attempt < MAX_INIT_RETRIES) {
               const delay = INIT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
-              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
+              console.warn(`CcxtBroker[${accountId}]: fetchMarkets() attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
               await new Promise(r => setTimeout(r, delay))
             } else {
-              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
+              console.warn(`CcxtBroker[${accountId}]: fetchMarkets() failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
             }
           }
         }
+      } else {
+        for (const type of types) {
+          const prevTypes = fmOpts['types']
+          fmOpts['types'] = [type]
+          try {
+            for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
+              try {
+                const markets = await origFetchMarkets(params)
+                allMarkets.push(...markets)
+                break
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err)
+                if (attempt < MAX_INIT_RETRIES) {
+                  const delay = INIT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
+                  console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
+                  await new Promise(r => setTimeout(r, delay))
+                } else {
+                  console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
+                }
+              }
+            }
+          } finally {
+            fmOpts['types'] = prevTypes
+          }
+        }
       }
-      return allMarkets as Awaited<ReturnType<Exchange['fetchMarkets']>>
+
+      // Deduplicate by symbol — some exchanges (e.g. Crypto.com) return overlapping
+      // markets across types. Keep the first occurrence to preserve original entry.
+      const seen = new Set<string>()
+      const deduped: unknown[] = []
+      for (const m of allMarkets) {
+        const sym = (m as { symbol?: string }).symbol
+        if (sym && !seen.has(sym)) {
+          seen.add(sym)
+          deduped.push(m)
+        } else if (!sym) {
+          deduped.push(m) // keep markets without symbol (shouldn't happen, but safe)
+        }
+      }
+      return deduped as Awaited<ReturnType<Exchange['fetchMarkets']>>
     }
 
     try {

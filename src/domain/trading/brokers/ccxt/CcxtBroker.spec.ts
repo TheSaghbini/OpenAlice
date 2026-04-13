@@ -1038,6 +1038,113 @@ describe('CcxtBroker — getMarketClock', () => {
   })
 })
 
+// ==================== init — fetchMarkets wrapper ====================
+
+describe('CcxtBroker — init fetchMarkets wrapper', () => {
+  function prepareForInit(acc: CcxtBroker, opts?: { types?: string[]; markets?: unknown[] }) {
+    const ex = (acc as any).exchange
+    ex.checkRequiredCredentials = vi.fn()
+    ex.requiredCredentials = {}
+    const returnMarkets = opts?.markets ?? [
+      { symbol: 'BTC/USDT', id: 'BTCUSDT', base: 'BTC', quote: 'USDT', type: 'spot', active: true },
+    ]
+    // Track calls to the original fetchMarkets
+    ex.fetchMarkets = vi.fn().mockResolvedValue(returnMarkets)
+    if (opts?.types !== undefined) {
+      ex.options = { fetchMarkets: { types: opts.types } }
+    }
+    // loadMarkets calls this.fetchMarkets internally, so we re-implement it
+    // to invoke the wrapper that init() installs.
+    ex.loadMarkets = vi.fn(async function (this: any) {
+      const result = await this.fetchMarkets()
+      // Populate markets object from returned array
+      for (const m of result) {
+        this.markets[(m as any).symbol] = m
+      }
+      return this.markets
+    }.bind(ex))
+    return ex
+  }
+
+  it('calls fetchMarkets once when exchange declares no types (e.g. Crypto.com)', async () => {
+    const acc = makeAccount()
+    const ex = prepareForInit(acc, { types: [] })
+
+    // Store the original fetchMarkets ref before init overwrites it
+    const origFetchMarkets = ex.fetchMarkets
+
+    await acc.init()
+
+    // The original fetchMarkets should have been called exactly once
+    expect(origFetchMarkets).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls fetchMarkets per-type when exchange declares types (e.g. Bybit)', async () => {
+    const acc = makeAccount()
+    const ex = prepareForInit(acc, { types: ['spot', 'linear'] })
+    const origFetchMarkets = ex.fetchMarkets
+
+    await acc.init()
+
+    // Should be called once per declared type
+    expect(origFetchMarkets).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips option type from declared types', async () => {
+    const acc = makeAccount()
+    const ex = prepareForInit(acc, { types: ['spot', 'linear', 'option'] })
+    const origFetchMarkets = ex.fetchMarkets
+
+    await acc.init()
+
+    // option filtered out → only spot + linear = 2 calls
+    expect(origFetchMarkets).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates markets by symbol, keeping first occurrence', async () => {
+    const acc = makeAccount()
+    const spotBtc = { symbol: 'BTC/USDT', id: 'BTCUSDT', base: 'BTC', quote: 'USDT', type: 'spot', active: true, source: 'first' }
+    const dupeBtc = { symbol: 'BTC/USDT', id: 'BTCUSDT', base: 'BTC', quote: 'USDT', type: 'spot', active: true, source: 'dupe' }
+    const ethMarket = { symbol: 'ETH/USDT', id: 'ETHUSDT', base: 'ETH', quote: 'USDT', type: 'spot', active: true }
+
+    // Exchange doesn't declare types → single call returning duplicates
+    const ex = prepareForInit(acc, { types: [], markets: [spotBtc, dupeBtc, ethMarket] })
+
+    await acc.init()
+
+    const marketKeys = Object.keys(ex.markets)
+    expect(marketKeys).toHaveLength(2)
+    expect(marketKeys).toContain('BTC/USDT')
+    expect(marketKeys).toContain('ETH/USDT')
+    // First occurrence kept
+    expect(ex.markets['BTC/USDT'].source).toBe('first')
+  })
+
+  it('deduplicates across per-type fetches for exchanges that return overlapping results', async () => {
+    const acc = makeAccount()
+    const btcSpot = { symbol: 'BTC/USDT', id: 'BTCUSDT', base: 'BTC', quote: 'USDT', type: 'spot', active: true }
+    const btcLinear = { symbol: 'BTC/USDT:USDT', id: 'BTCUSDT_PERP', base: 'BTC', quote: 'USDT', type: 'swap', active: true }
+    const btcDupe = { symbol: 'BTC/USDT', id: 'BTCUSDT', base: 'BTC', quote: 'USDT', type: 'spot', active: true }
+
+    const ex = prepareForInit(acc, { types: ['spot', 'linear'] })
+    let callCount = 0
+    ex.fetchMarkets = vi.fn(async () => {
+      callCount++
+      return callCount === 1 ? [btcSpot] : [btcLinear, btcDupe]
+    })
+    const origFetchMarkets = ex.fetchMarkets
+
+    await acc.init()
+
+    expect(origFetchMarkets).toHaveBeenCalledTimes(2)
+    const marketKeys = Object.keys(ex.markets)
+    // btcSpot + btcLinear (dupe of btcSpot removed)
+    expect(marketKeys).toHaveLength(2)
+    expect(marketKeys).toContain('BTC/USDT')
+    expect(marketKeys).toContain('BTC/USDT:USDT')
+  })
+})
+
 // ==================== getCapabilities ====================
 
 describe('CcxtBroker — getCapabilities', () => {

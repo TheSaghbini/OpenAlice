@@ -234,3 +234,72 @@ describe('createTradingTools — getOrders summarization', () => {
     expect(result['mock-paper|ETH'].orders).toHaveLength(1)
   })
 })
+
+// ==================== tradingPush — YOLO mode ====================
+
+describe('tradingPush — YOLO mode', () => {
+  let broker: MockBroker
+  let mgr: AccountManager
+
+  beforeEach(() => {
+    broker = new MockBroker({ id: 'mock-paper' })
+    broker.setQuote('AAPL', 150)
+    mgr = makeManager(broker)
+  })
+
+  it('returns manual approval message when yolo is false', async () => {
+    const tools = createTradingTools(mgr, undefined, { yolo: () => false })
+    const uta = mgr.resolve('mock-paper')[0]
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 })
+    uta.commit('test buy')
+
+    const result = await (tools.tradingPush.execute as Function)({ source: 'mock-paper' })
+    expect(result.message).toContain('manual approval')
+    expect(result.pending).toBeDefined()
+  })
+
+  it('executes push when yolo is true', async () => {
+    const tools = createTradingTools(mgr, undefined, { yolo: () => true })
+    const uta = mgr.resolve('mock-paper')[0]
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 })
+    uta.commit('yolo buy')
+
+    const result = await (tools.tradingPush.execute as Function)({ source: 'mock-paper' })
+    expect(result.mode).toBe('yolo')
+    expect(result.source).toBe('mock-paper')
+    // After push, no pending should remain
+    expect(uta.status().pendingMessage).toBeNull()
+  })
+
+  it('executes push with async yolo getter', async () => {
+    const tools = createTradingTools(mgr, undefined, { yolo: async () => true })
+    const uta = mgr.resolve('mock-paper')[0]
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 })
+    uta.commit('async yolo buy')
+
+    const result = await (tools.tradingPush.execute as Function)({ source: 'mock-paper' })
+    expect(result.mode).toBe('yolo')
+  })
+
+  it('defaults to manual approval when no opts provided', async () => {
+    const tools = createTradingTools(mgr)
+    const uta = mgr.resolve('mock-paper')[0]
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 })
+    uta.commit('default buy')
+
+    const result = await (tools.tradingPush.execute as Function)({ source: 'mock-paper' })
+    expect(result.message).toContain('manual approval')
+  })
+
+  it('returns broker error in yolo mode without crashing', async () => {
+    const tools = createTradingTools(mgr, undefined, { yolo: () => true })
+    const uta = mgr.resolve('mock-paper')[0]
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 1 })
+    uta.commit('failing buy')
+    vi.spyOn(uta, 'push').mockRejectedValue(new Error('broker unavailable'))
+
+    const result = await (tools.tradingPush.execute as Function)({ source: 'mock-paper' })
+    expect(result.mode).toBe('yolo')
+    expect(result.error).toContain('broker unavailable')
+  })
+})

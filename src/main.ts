@@ -1,7 +1,7 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
 // Engine removed — AgentCenter is the top-level AI entry point
-import { loadConfig, readAccountsConfig } from './core/config.js'
+import { loadConfig, readAccountsConfig, readTradingConfig } from './core/config.js'
 import type { Plugin, EngineContext, ReconnectResult } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
 import { TelegramPlugin } from './connectors/telegram/index.js'
@@ -202,8 +202,11 @@ async function main() {
   toolCenter.register(createThinkingTools(), 'thinking')
 
   // One unified set of trading tools — routes via `source` parameter at runtime
+  // @ai-context Uses readTradingConfig() for hot-reload — toggling yolo in trading.json takes effect immediately
   toolCenter.register(
-    createTradingTools(accountManager, fxService),
+    createTradingTools(accountManager, fxService, {
+      yolo: async () => (await readTradingConfig()).yolo,
+    }),
     'trading',
   )
 

@@ -238,6 +238,10 @@ const snapshotSchema = z.object({
   every: z.string().default('15m'),
 })
 
+const tradingSchema = z.object({
+  yolo: z.boolean().default(false),
+})
+
 export const toolsSchema = z.object({
   /** Tool names that are disabled. Tools not listed are enabled by default. */
   disabled: z.array(z.string()).default([]),
@@ -294,6 +298,7 @@ export type Config = {
   connectors: z.infer<typeof connectorsSchema>
   news: z.infer<typeof newsCollectorSchema>
   tools: z.infer<typeof toolsSchema>
+  trading: z.infer<typeof tradingSchema>
 }
 
 // ==================== Loader ====================
@@ -360,7 +365,7 @@ function applyOllamaEnvOverride(config: AIProviderConfig): AIProviderConfig {
 }
 
 export async function loadConfig(): Promise<Config> {
-  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'heartbeat.json', 'snapshot.json', 'connectors.json', 'news.json', 'tools.json'] as const
+  const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'heartbeat.json', 'snapshot.json', 'connectors.json', 'news.json', 'tools.json', 'trading.json'] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
 
   // TODO: remove all migration blocks before v1.0 — no stable release yet, breaking changes are fine
@@ -535,6 +540,7 @@ export async function loadConfig(): Promise<Config> {
     connectors:    await parseAndSeed(files[9], connectorsSchema, raws[9]),
     news:          await parseAndSeed(files[10], newsCollectorSchema, raws[10]),
     tools:         await parseAndSeed(files[11], toolsSchema, raws[11]),
+    trading:       await parseAndSeed(files[12], tradingSchema, raws[12]),
   }
 }
 
@@ -623,6 +629,22 @@ export async function readToolsConfig() {
   }
 }
 
+/** Read trading config from disk (called per-request for hot-reload). */
+export async function readTradingConfig() {
+  try {
+    const raw = JSON.parse(await readFile(resolve(CONFIG_DIR, 'trading.json'), 'utf-8'))
+    const config = tradingSchema.parse(raw)
+    // Allow YOLO env var override (for Railway / container deployments without filesystem)
+    if (process.env['YOLO'] === 'true') config.yolo = true
+    return config
+  } catch (err) {
+    logger.warn({ err }, 'Failed to read trading.json — falling back to defaults')
+    const config = tradingSchema.parse({})
+    if (process.env['YOLO'] === 'true') config.yolo = true
+    return config
+  }
+}
+
 /** Read connectors config from disk (called per-request for hot-reload). */
 export async function readConnectorsConfig() {
   try {
@@ -704,6 +726,7 @@ const sectionSchemas: Record<ConfigSection, z.ZodTypeAny> = {
   connectors: connectorsSchema,
   news: newsCollectorSchema,
   tools: toolsSchema,
+  trading: tradingSchema,
 }
 
 const sectionFiles: Record<ConfigSection, string> = {
@@ -719,6 +742,7 @@ const sectionFiles: Record<ConfigSection, string> = {
   connectors: 'connectors.json',
   news: 'news.json',
   tools: 'tools.json',
+  trading: 'trading.json',
 }
 
 /** All valid config section names (derived from sectionSchemas). */
@@ -727,6 +751,11 @@ export const validSections = Object.keys(sectionSchemas) as ConfigSection[]
 /** Validate and write a config section to disk. Returns the validated config. */
 export async function writeConfigSection(section: ConfigSection, data: unknown): Promise<unknown> {
   const schema = sectionSchemas[section]
+  // @ai-security Strip yolo from web API writes — YOLO must be config-file or env-var only
+  if (section === 'trading' && typeof data === 'object' && data !== null) {
+    const { yolo: _stripped, ...rest } = data as Record<string, unknown>
+    data = rest
+  }
   const validated = schema.parse(data)
   await mkdir(CONFIG_DIR, { recursive: true })
   await writeFile(resolve(CONFIG_DIR, sectionFiles[section]), JSON.stringify(validated, null, 2) + '\n')

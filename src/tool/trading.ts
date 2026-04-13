@@ -60,7 +60,12 @@ const sourceDesc = (required: boolean, extra?: string) => {
   return base + req + (extra ? ` ${extra}` : '')
 }
 
-export function createTradingTools(manager: AccountManager, fxService?: FxService): Record<string, Tool> {
+export function createTradingTools(
+  manager: AccountManager,
+  fxService?: FxService,
+  opts?: { yolo?: () => boolean | Promise<boolean> },
+): Record<string, Tool> {
+  const isYolo = async () => (await opts?.yolo?.()) ?? false
   return {
     listAccounts: tool({
       description: 'List all registered trading accounts with their id, provider, label, and capabilities.',
@@ -423,7 +428,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     }),
 
     tradingPush: tool({
-      description: 'Trading push requires manual approval — call tradingStatus to show the user what is pending, then tell them to approve (via Web UI, Telegram /trading, or other connected channels).',
+      description: 'Push committed trading operations. Behavior depends on YOLO mode: if enabled, executes immediately (guard pipeline still applies); if disabled, requires manual approval via Web UI or Telegram.',
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
       }),
@@ -440,6 +445,20 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
           }
           return { message: 'No committed operations to push.' }
         }
+
+        if (await isYolo()) {
+          const results: Array<Record<string, unknown>> = []
+          for (const uta of pending) {
+            try {
+              const result = await uta.push()
+              results.push({ source: uta.id, mode: 'yolo', ...result })
+            } catch (err) {
+              results.push({ source: uta.id, mode: 'yolo', ...handleBrokerError(err) })
+            }
+          }
+          return results.length === 1 ? results[0] : results
+        }
+
         return {
           message: 'Push requires manual approval. The user can approve pending operations from any connected channel (Web UI, Telegram /trading, etc).',
           pending: pending.map(uta => ({
