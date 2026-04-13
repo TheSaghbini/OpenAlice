@@ -9,6 +9,7 @@ import {
   parseHeartbeatResponse,
   isWithinActiveHours,
   HeartbeatDedup,
+  readHeartbeatFile,
   HEARTBEAT_JOB_NAME,
   type Heartbeat,
   type HeartbeatConfig,
@@ -628,6 +629,16 @@ describe('HeartbeatDedup', () => {
     const d = new HeartbeatDedup(1000)
     d.record('hello', 100)
     expect(d.isDuplicate('world', 500)).toBe(false)
+  })
+})
+
+// ==================== Unit Tests: readHeartbeatFile ====================
+
+describe('readHeartbeatFile', () => {
+  it('should return non-empty string (reads default/heartbeat.default.md)', async () => {
+    const content = await readHeartbeatFile()
+    expect(content.length).toBeGreaterThan(0)
+    expect(content).toContain('Heartbeat')
   })
 })
 

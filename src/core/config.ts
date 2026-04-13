@@ -229,7 +229,7 @@ const connectorsSchema = z.object({
 const heartbeatSchema = z.object({
   enabled: z.boolean().default(false),
   every: z.string().default('30m'),
-  prompt: z.string().default('Read data/brain/heartbeat.md (or default/heartbeat.default.md if not found) and follow the instructions inside.'),
+  prompt: z.string().default('Check if anything needs attention and report using the structured heartbeat format.'),
   activeHours: activeHoursSchema,
 })
 

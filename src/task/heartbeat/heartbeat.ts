@@ -15,6 +15,8 @@
  *   - heartbeat.error { error, durationMs }
  */
 
+import { readFile } from 'fs/promises'
+import { resolve } from 'path'
 import type { EventLog, EventLogEntry } from '../../core/event-log.js'
 import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
@@ -25,6 +27,8 @@ import type { CronEngine, CronFirePayload } from '../cron/engine.js'
 // ==================== Constants ====================
 
 export const HEARTBEAT_JOB_NAME = '__heartbeat__'
+const HEARTBEAT_FILE = resolve('data/brain/heartbeat.md')
+const HEARTBEAT_DEFAULT = resolve('default/heartbeat.default.md')
 
 // ==================== Config ====================
 
@@ -94,6 +98,15 @@ export interface Heartbeat {
   isEnabled(): boolean
 }
 
+// ==================== Helpers ====================
+
+/** @ai-context Read heartbeat instructions file at runtime (not cached). */
+export async function readHeartbeatFile(): Promise<string> {
+  try { return await readFile(HEARTBEAT_FILE, 'utf-8') } catch { /* not found */ }
+  try { return await readFile(HEARTBEAT_DEFAULT, 'utf-8') } catch { /* not found */ }
+  return ''
+}
+
 // ==================== Factory ====================
 
 export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
@@ -129,13 +142,17 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
         return
       }
 
-      // 2. Call AI
-      const result = await agentCenter.askWithSession(payload.payload, session, {
+      // 2. Read heartbeat file (re-read on every fire so edits take effect)
+      const heartbeatFileContent = await readHeartbeatFile()
+      const prompt = heartbeatFileContent || payload.payload
+
+      // 3. Call AI
+      const result = await agentCenter.askWithSession(prompt, session, {
         historyPreamble: 'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
       })
       const durationMs = now() - startMs
 
-      // 3. Parse structured response
+      // 4. Parse structured response
       const parsed = parseHeartbeatResponse(result.text)
 
       if (parsed.status === 'HEARTBEAT_OK') {
@@ -155,14 +172,14 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
         return
       }
 
-      // 4. Dedup
+      // 5. Dedup
       if (dedup.isDuplicate(text, now())) {
         console.log(`heartbeat: skipped (duplicate) (${durationMs}ms)`)
         await eventLog.append('heartbeat.skip', { reason: 'duplicate' })
         return
       }
 
-      // 5. Send notification
+      // 6. Send notification
       let delivered = false
       try {
         const result2 = await connectorCenter.notify(text, {
@@ -177,7 +194,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
 
       console.log(`heartbeat: CHAT_YES — delivered=${delivered} (${durationMs}ms)`)
 
-      // 6. Done event
+      // 7. Done event
       await eventLog.append('heartbeat.done', {
         reply: text,
         reason: parsed.reason,
