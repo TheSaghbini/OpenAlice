@@ -14,6 +14,10 @@ function gitFilePath(accountId: string): string {
   return resolve(`data/trading/${accountId}/commit.json`)
 }
 
+function brokerStateFilePath(accountId: string): string {
+  return resolve(`data/trading/${accountId}/broker-state.json`)
+}
+
 /** Legacy paths for backward compat. TODO: remove before v1.0 */
 const LEGACY_GIT_PATHS: Record<string, string> = {
   'bybit-main': resolve('data/crypto-trading/commit.json'),
@@ -42,6 +46,26 @@ export async function loadGitState(accountId: string): Promise<GitExportState | 
 export function createGitPersister(accountId: string): (state: GitExportState) => Promise<void> {
   const filePath = gitFilePath(accountId)
   return async (state: GitExportState) => {
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, JSON.stringify(state, null, 2))
+  }
+}
+
+// ==================== Broker State ====================
+
+/** @ai-context Load broker-specific state (e.g. CCXT orderSymbolCache) from disk. */
+export async function loadBrokerState(accountId: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    return JSON.parse(await readFile(brokerStateFilePath(accountId), 'utf-8')) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+/** @ai-context Create a callback that persists broker state to disk. */
+export function createBrokerStatePersister(accountId: string): (state: Record<string, unknown>) => Promise<void> {
+  const filePath = brokerStateFilePath(accountId)
+  return async (state: Record<string, unknown>) => {
     await mkdir(dirname(filePath), { recursive: true })
     await writeFile(filePath, JSON.stringify(state, null, 2))
   }

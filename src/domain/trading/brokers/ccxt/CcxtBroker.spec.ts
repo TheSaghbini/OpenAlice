@@ -1164,3 +1164,441 @@ describe('CcxtBroker — close', () => {
     await expect(acc.close()).resolves.toBeUndefined()
   })
 })
+
+// ==================== Fix 1: Spot balance support in getAccount ====================
+
+describe('CcxtBroker — getAccount spot balance', () => {
+  it('fetches spot balance when exchange has spot markets and no skipSpotBalance override', async () => {
+    const acc = makeAccount({ exchange: 'binance' }) // binance has no override → no skipSpotBalance
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn()
+      .mockImplementation((params?: Record<string, unknown>) => {
+        if (params?.type === 'spot') {
+          return Promise.resolve({
+            free: { USDT: 5.0, USDC: 1.63 },
+            used: { USDT: 0 },
+            total: { USDT: 5.0, USDC: 1.63 },
+          })
+        }
+        // Default (derivatives) wallet
+        return Promise.resolve({
+          free: { USDT: 1.54 },
+          used: { USDT: 0 },
+          total: { USDT: 1.54 },
+        })
+      })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    // Should use spot balance: USDT 5.0 + USDC 1.63 = 6.63
+    expect(info.totalCashValue).toBeCloseTo(6.63)
+    expect(info.netLiquidation).toBeCloseTo(6.63)
+  })
+
+  it('falls back to default balance when spot fetch fails', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'BTC/USDT': makeSpotMarket('BTC', 'USDT', 'BTC/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn()
+      .mockImplementation((params?: Record<string, unknown>) => {
+        if (params?.type === 'spot') throw new Error('not supported')
+        return Promise.resolve({
+          free: { USDT: 100 },
+          used: { USDT: 50 },
+          total: { USDT: 150 },
+        })
+      })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    expect(info.totalCashValue).toBe(100)
+    expect(info.initMarginReq).toBe(50)
+  })
+
+  it('skips spot balance for derivatives-first exchanges (bybit override)', async () => {
+    const acc = makeAccount({ exchange: 'bybit' })
+    setInitialized(acc, {
+      'BTC/USDT': makeSpotMarket('BTC', 'USDT', 'BTC/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 5000 },
+      used: { USDT: 2000 },
+      total: { USDT: 7000 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    // Should use default balance (not spot) due to bybit override
+    expect(info.totalCashValue).toBe(5000)
+    // fetchBalance should NOT have been called with { type: 'spot' }
+    expect((acc as any).exchange.fetchBalance).toHaveBeenCalledWith()
+    expect((acc as any).exchange.fetchBalance).not.toHaveBeenCalledWith({ type: 'spot' })
+  })
+
+  it('sums multiple stablecoin currencies for cash', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, { 'ETH/USDT': makeSpotMarket('ETH', 'USDT', 'ETH/USDT') })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100, USDC: 50, USD: 25, DAI: 10, BTC: 0.5 },
+      used: {},
+      total: { USDT: 100, USDC: 50, USD: 25, DAI: 10, BTC: 0.5 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    // Cash = USDT + USDC + USD + DAI = 100 + 50 + 25 + 10 = 185
+    // BTC is not counted as cash
+    expect(info.totalCashValue).toBe(185)
+  })
+
+  it('handles fetchPositions failure gracefully for spot-only exchanges', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, { 'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD') })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USD: 10 },
+      used: {},
+      total: { USD: 10 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockRejectedValue(new Error('not supported'))
+
+    const info = await acc.getAccount()
+    expect(info.totalCashValue).toBe(10)
+    expect(info.unrealizedPnL).toBe(0)
+  })
+
+  it('includes spot holdings value in netLiquidation', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+      'ETH/USDT': makeSpotMarket('ETH', 'USDT', 'ETH/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100 },
+      used: {},
+      total: { USDT: 100, CRO: 1000, ETH: 0.5 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockImplementation((symbol: string) => {
+      if (symbol === 'CRO/USD') return Promise.resolve({ last: 1.0 })
+      if (symbol === 'ETH/USDT') return Promise.resolve({ last: 2000 })
+      return Promise.reject(new Error('unknown'))
+    })
+
+    const info = await acc.getAccount()
+    // Cash = 100 USDT
+    expect(info.totalCashValue).toBe(100)
+    // netLiq = cash(100) + derivatives(0) + spotHoldings(1000*1 + 0.5*2000 = 2000) = 2100
+    expect(info.netLiquidation).toBe(2100)
+  })
+
+  it('excludes spot holdings from netLiquidation for skipSpotBalance exchanges', async () => {
+    const acc = makeAccount({ exchange: 'bybit' }) // bybit has skipSpotBalance: true
+    setInitialized(acc, {
+      'CRO/USDT': makeSpotMarket('CRO', 'USDT', 'CRO/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100 },
+      used: {},
+      total: { USDT: 100, CRO: 1000 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    // bybit skips spot → no spot holdings added
+    expect(info.netLiquidation).toBe(100)
+  })
+
+  it('treats FDUSD as a stablecoin (cash, not holding)', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, { 'ETH/USDT': makeSpotMarket('ETH', 'USDT', 'ETH/USDT') })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { FDUSD: 500 },
+      used: {},
+      total: { FDUSD: 500 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+
+    const info = await acc.getAccount()
+    // FDUSD counted as cash (stablecoin)
+    expect(info.totalCashValue).toBe(500)
+    expect(info.netLiquidation).toBe(500)
+  })
+})
+
+// ==================== Fix 2: Spot holdings as positions ====================
+
+describe('CcxtBroker — getPositions spot holdings', () => {
+  it('converts spot balance to Position objects for non-stablecoin currencies', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+      'ETH/USDT': makeSpotMarket('ETH', 'USDT', 'ETH/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockRejectedValue(new Error('not supported'))
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { CRO: 100, ETH: 0.5, USDT: 50 },
+      used: {},
+      total: { CRO: 100, ETH: 0.5, USDT: 50 },
+    })
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockImplementation((symbol: string) => {
+      if (symbol === 'CRO/USD') return Promise.resolve({ last: 0.08 })
+      if (symbol === 'ETH/USDT') return Promise.resolve({ last: 2500 })
+      return Promise.reject(new Error('unknown'))
+    })
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(2)
+
+    const cro = positions.find(p => p.contract.symbol === 'CRO')!
+    expect(cro).toBeDefined()
+    expect(cro.side).toBe('long')
+    expect(cro.quantity.toString()).toBe('100')
+    expect(cro.marketPrice).toBe(0.08)
+    expect(cro.marketValue).toBeCloseTo(8)
+
+    const eth = positions.find(p => p.contract.symbol === 'ETH')!
+    expect(eth).toBeDefined()
+    expect(eth.quantity.toString()).toBe('0.5')
+    expect(eth.marketPrice).toBe(2500)
+    expect(eth.marketValue).toBeCloseTo(1250)
+  })
+
+  it('skips stablecoin balances in spot position conversion', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100, USDC: 50, CRO: 10 },
+      used: {},
+      total: { USDT: 100, USDC: 50, CRO: 10 },
+    })
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockResolvedValue({ last: 0.08 })
+
+    const positions = await acc.getPositions()
+    // Only CRO (not USDT or USDC)
+    expect(positions).toHaveLength(1)
+    expect(positions[0].contract.symbol).toBe('CRO')
+  })
+
+  it('skips dust balances below $0.01', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { CRO: 0.001 },
+      used: {},
+      total: { CRO: 0.001 },
+    })
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockResolvedValue({ last: 0.08 })
+
+    const positions = await acc.getPositions()
+    // CRO worth 0.001 * 0.08 = 0.00008 < $0.01 → skipped
+    expect(positions).toHaveLength(0)
+  })
+
+  it('preserves derivatives positions alongside spot holdings', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([{
+      symbol: 'BTC/USDT:USDT', contracts: 0.1, contractSize: 1,
+      markPrice: 60000, entryPrice: 58000, unrealizedPnl: 200,
+      side: 'long',
+    }])
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { CRO: 100 },
+      used: {},
+      total: { CRO: 100 },
+    })
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockResolvedValue({ last: 0.08 })
+
+    const positions = await acc.getPositions()
+    expect(positions).toHaveLength(2)
+
+    const btc = positions.find(p => p.contract.symbol === 'BTC')!
+    expect(btc.side).toBe('long')
+    expect(btc.marketPrice).toBe(60000)
+
+    const cro = positions.find(p => p.contract.symbol === 'CRO')!
+    expect(cro.side).toBe('long')
+    expect(cro.marketPrice).toBe(0.08)
+  })
+
+  it('does not add spot holdings for derivatives-first exchanges', async () => {
+    const acc = makeAccount({ exchange: 'bybit' }) // bybit has skipSpotBalance: true
+    setInitialized(acc, {
+      'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT'),
+      'CRO/USDT': makeSpotMarket('CRO', 'USDT', 'CRO/USDT'),
+    })
+
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { CRO: 100 },
+      used: {},
+      total: { CRO: 100 },
+    })
+
+    const positions = await acc.getPositions()
+    // Bybit: skipSpotBalance → no spot holdings added
+    expect(positions).toHaveLength(0)
+    // fetchBalance should NOT have been called (getPositions spot path is skipped)
+    expect((acc as any).exchange.fetchBalance).not.toHaveBeenCalled()
+  })
+})
+
+// ==================== Fix 3: Order symbol cache persistence + open order discovery ====================
+
+describe('CcxtBroker — order cache persistence', () => {
+  it('exportBrokerState returns orderSymbolCache as plain object', () => {
+    const acc = makeAccount()
+    setInitialized(acc, {})
+    ;(acc as any).orderSymbolCache.set('order-1', 'BTC/USDT:USDT')
+    ;(acc as any).orderSymbolCache.set('order-2', 'ETH/USDT:USDT')
+
+    const state = acc.exportBrokerState()
+    expect(state.orderSymbolCache).toEqual({
+      'order-1': 'BTC/USDT:USDT',
+      'order-2': 'ETH/USDT:USDT',
+    })
+  })
+
+  it('loadBrokerState restores orderSymbolCache', () => {
+    const acc = makeAccount()
+    setInitialized(acc, {})
+
+    acc.loadBrokerState({
+      orderSymbolCache: {
+        'order-1': 'BTC/USDT:USDT',
+        'order-2': 'ETH/USDT:USDT',
+      },
+    })
+
+    expect((acc as any).orderSymbolCache.get('order-1')).toBe('BTC/USDT:USDT')
+    expect((acc as any).orderSymbolCache.get('order-2')).toBe('ETH/USDT:USDT')
+  })
+
+  it('loadBrokerState handles missing orderSymbolCache gracefully', () => {
+    const acc = makeAccount()
+    setInitialized(acc, {})
+
+    acc.loadBrokerState({})
+    expect((acc as any).orderSymbolCache.size).toBe(0)
+  })
+})
+
+describe('CcxtBroker — getOrder open order discovery', () => {
+  it('discovers order symbol via fetchOpenOrders on cache miss', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    // No orderSymbolCache entry for 'ord-discovered'
+    ;(acc as any).exchange.fetchOpenOrders = vi.fn().mockResolvedValue([
+      { id: 'ord-discovered', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 1, type: 'limit', price: 2000, status: 'open' },
+      { id: 'ord-other', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.1, type: 'limit', price: 60000, status: 'open' },
+    ])
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+      id: 'ord-discovered', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 1,
+      type: 'limit', price: 2000, status: 'open',
+    })
+
+    const result = await acc.getOrder('ord-discovered')
+    expect(result).not.toBeNull()
+    expect(result!.order.action).toBe('BUY')
+    // fetchOpenOrders was called to discover the symbol
+    expect((acc as any).exchange.fetchOpenOrders).toHaveBeenCalled()
+    // The discovered symbol should now be in the cache
+    expect((acc as any).orderSymbolCache.get('ord-discovered')).toBe('ETH/USDT:USDT')
+    expect((acc as any).orderSymbolCache.get('ord-other')).toBe('BTC/USDT:USDT')
+  })
+
+  it('returns null when order not found in open orders either', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {})
+
+    ;(acc as any).exchange.fetchOpenOrders = vi.fn().mockResolvedValue([])
+
+    const result = await acc.getOrder('nonexistent')
+    expect(result).toBeNull()
+  })
+
+  it('returns null when fetchOpenOrders fails', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {})
+
+    ;(acc as any).exchange.fetchOpenOrders = vi.fn().mockRejectedValue(new Error('API error'))
+
+    const result = await acc.getOrder('nonexistent')
+    expect(result).toBeNull()
+  })
+})
+
+// ==================== Balance + ticker caching ====================
+
+describe('CcxtBroker — spot balance cache', () => {
+  it('reuses cached balance within TTL (no redundant fetchBalance calls)', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100, CRO: 50 },
+      used: {},
+      total: { USDT: 100, CRO: 50 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockResolvedValue({ last: 0.10 })
+
+    // Call both getAccount and getPositions (simulates a sync cycle)
+    await acc.getAccount()
+    await acc.getPositions()
+
+    // fetchBalance should only be called once (cached on second call)
+    expect((acc as any).exchange.fetchBalance).toHaveBeenCalledTimes(1)
+  })
+
+  it('ticker cache deduplicates fetchTicker calls within a sync cycle', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, {
+      'CRO/USD': makeSpotMarket('CRO', 'USD', 'CRO/USD'),
+    })
+
+    ;(acc as any).exchange.fetchBalance = vi.fn().mockResolvedValue({
+      free: { USDT: 100 },
+      used: {},
+      total: { USDT: 100, CRO: 50 },
+    })
+    ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
+    ;(acc as any).exchange.fetchTicker = vi.fn().mockResolvedValue({ last: 0.10 })
+
+    // Both getAccount (for spot holdings value) and getPositions (for spot positions) need CRO ticker
+    await acc.getAccount()
+    await acc.getPositions()
+
+    // fetchTicker('CRO/USD') called once (cached on second)
+    expect((acc as any).exchange.fetchTicker).toHaveBeenCalledTimes(1)
+    expect((acc as any).exchange.fetchTicker).toHaveBeenCalledWith('CRO/USD')
+  })
+})

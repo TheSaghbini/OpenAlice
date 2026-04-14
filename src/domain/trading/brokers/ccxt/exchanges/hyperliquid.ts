@@ -18,6 +18,8 @@ import type { Exchange, Order as CcxtOrder, Position as CcxtPosition } from 'ccx
 import type { CcxtExchangeOverrides } from '../overrides.js'
 
 export const hyperliquidOverrides: CcxtExchangeOverrides = {
+  skipSpotBalance: true,
+
   /** Inject a fetched ticker price for market orders, then delegate to default. */
   async placeOrder(
     exchange: Exchange,

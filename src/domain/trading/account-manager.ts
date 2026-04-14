@@ -11,7 +11,7 @@ import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
 import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
 import { createBroker } from './brokers/factory.js'
 import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
-import { loadGitState, createGitPersister } from './git-persistence.js'
+import { loadGitState, createGitPersister, loadBrokerState, createBrokerStatePersister } from './git-persistence.js'
 import { readAccountsConfig, type AccountConfig } from '../../core/config.js'
 import type { EventLog } from '../../core/event-log.js'
 import type { ToolCenter } from '../../core/tool-center.js'
@@ -90,11 +90,29 @@ export class AccountManager {
   /** Create a UTA from account config, register it, and start async broker connection. */
   async initAccount(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
     const broker = createBroker(accCfg)
+
+    // @ai-context Restore broker-specific state (e.g. CCXT orderSymbolCache) from disk.
+    if (broker instanceof CcxtBroker) {
+      const brokerState = await loadBrokerState(accCfg.id)
+      if (brokerState) broker.loadBrokerState(brokerState as { orderSymbolCache?: Record<string, string> })
+    }
+
     const savedState = await loadGitState(accCfg.id)
+    const gitPersister = createGitPersister(accCfg.id)
+    const brokerStatePersister = broker instanceof CcxtBroker
+      ? createBrokerStatePersister(accCfg.id)
+      : undefined
+
     const uta = new UnifiedTradingAccount(broker, {
       guards: accCfg.guards,
       savedState,
-      onCommit: createGitPersister(accCfg.id),
+      onCommit: async (state) => {
+        await gitPersister(state)
+        // Persist broker state alongside git state on each commit
+        if (brokerStatePersister && broker instanceof CcxtBroker) {
+          await brokerStatePersister(broker.exportBrokerState())
+        }
+      },
       onHealthChange: (accountId, health) => {
         this.eventLog?.append('account.health', { accountId, ...health })
       },

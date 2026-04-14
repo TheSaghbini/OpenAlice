@@ -33,6 +33,10 @@ import { hyperliquidOverrides } from './exchanges/hyperliquid.js'
 type DefaultImpl<TArgs extends unknown[], TResult> = (...args: TArgs) => Promise<TResult>
 
 export interface CcxtExchangeOverrides {
+  /** Skip automatic spot-wallet balance fetch. Set for derivatives-first exchanges
+   *  (e.g. Bybit, Hyperliquid) where the default wallet is already correct. */
+  skipSpotBalance?: boolean
+
   /** Fetch a single order by ID (regular + conditional). */
   fetchOrderById?(
     exchange: Exchange,

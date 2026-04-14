@@ -43,7 +43,10 @@ import {
   defaultFetchPositions,
 } from './overrides.js'
 
-const STABLECOIN_TO_USD = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD'])
+const STABLECOIN_TO_USD = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'])
+
+/** @ai-context Currencies treated as cash equivalents (1:1 USD). */
+const CASH_CURRENCIES = new Set([...STABLECOIN_TO_USD, 'USD'])
 
 /** Normalize stablecoin quote currencies to 'USD' so they don't trigger FX conversion. */
 function normalizeQuoteCurrency(quote: string): string {
@@ -130,6 +133,12 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
+  /** @ai-context Short-lived cache to avoid redundant fetchBalance calls within a sync cycle. */
+  private spotBalanceCache: { balance: Record<string, Record<string, unknown>>; ts: number } | null = null
+  /** @ai-context Short-lived cache to avoid redundant fetchTicker calls within a sync cycle. */
+  private tickerCache = new Map<string, { ticker: { last?: number | null }; ts: number }>()
+  private readonly CACHE_TTL = 10_000 // 10 seconds
+
   constructor(config: CcxtBrokerConfig) {
     this.exchangeName = config.exchange
     this.meta = { exchange: config.exchange }
@@ -174,6 +183,105 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private ensureInit(): void {
     if (!this.initialized) {
       throw new BrokerError('CONFIG', `CcxtBroker[${this.id}] not initialized. Call init() first.`)
+    }
+  }
+
+  /**
+   * @ai-context Fetch balance preferring spot wallet for exchanges with spot markets.
+   * Derivatives-first exchanges (Bybit, Hyperliquid) skip the spot attempt via override flag.
+   * Crypto.com and similar exchanges default to the derivatives wallet without { type: 'spot' }.
+   */
+  private async fetchBalanceForAccount(): Promise<Record<string, Record<string, unknown>>> {
+    if (!this.overrides.skipSpotBalance) {
+      const hasSpot = Object.values(this.markets).some(m => m.type === 'spot')
+      if (hasSpot) {
+        try {
+          return await this.exchange.fetchBalance({ type: 'spot' }) as unknown as Record<string, Record<string, unknown>>
+        } catch { /* type: 'spot' not supported — fall through to default */ }
+      }
+    }
+    return await this.exchange.fetchBalance() as unknown as Record<string, Record<string, unknown>>
+  }
+
+  /** @ai-context Cached spot balance fetch — deduplicates calls within a sync cycle (10s TTL). */
+  private async fetchSpotBalance(): Promise<Record<string, Record<string, unknown>>> {
+    const now = Date.now()
+    if (this.spotBalanceCache && now - this.spotBalanceCache.ts < this.CACHE_TTL) {
+      return this.spotBalanceCache.balance
+    }
+    const balance = await this.fetchBalanceForAccount()
+    this.spotBalanceCache = { balance, ts: now }
+    return balance
+  }
+
+  /** @ai-context Cached ticker fetch — deduplicates calls within a sync cycle (10s TTL). */
+  private async fetchCachedTicker(symbol: string): Promise<{ last?: number | null }> {
+    const now = Date.now()
+    const cached = this.tickerCache.get(symbol)
+    if (cached && now - cached.ts < this.CACHE_TTL) {
+      return cached.ticker
+    }
+    const ticker = await this.exchange.fetchTicker(symbol)
+    this.tickerCache.set(symbol, { ticker, ts: now })
+    return ticker
+  }
+
+  /**
+   * @ai-context Calculate total USD value of non-stablecoin spot holdings.
+   * Iterates non-cash currencies, looks up spot market prices, and sums values.
+   */
+  private async getSpotHoldingsValue(balance: Record<string, Record<string, unknown>>): Promise<number> {
+    const totalBal = (balance['total'] ?? {}) as Record<string, unknown>
+    let holdingsValue = new Decimal(0)
+
+    for (const [currency, amount] of Object.entries(totalBal)) {
+      if (CASH_CURRENCIES.has(currency.toUpperCase())) continue
+      const qty = new Decimal(String(amount ?? 0))
+      if (qty.isZero() || qty.isNeg()) continue
+
+      const spotSymbol = this.findSpotMarket(currency)
+      if (!spotSymbol) continue
+
+      try {
+        const ticker = await this.fetchCachedTicker(spotSymbol)
+        const price = ticker.last ?? 0
+        const value = qty.mul(new Decimal(price))
+        if (value.lessThan(0.01)) continue // Skip dust
+        holdingsValue = holdingsValue.plus(value)
+      } catch { /* skip if can't get price */ }
+    }
+
+    return holdingsValue.toNumber()
+  }
+
+  /**
+   * @ai-context Find a spot market for a base currency, trying common quote currencies.
+   * Returns the CCXT unified symbol (e.g. "CRO/USD") or null.
+   */
+  private findSpotMarket(baseCurrency: string): string | null {
+    const base = baseCurrency.toUpperCase()
+    for (const quote of ['USD', 'USDT', 'USDC']) {
+      const symbol = `${base}/${quote}`
+      if (this.markets[symbol] && this.markets[symbol].type === 'spot') return symbol
+    }
+    return null
+  }
+
+  /**
+   * @ai-context Discover an order's symbol by scanning open orders.
+   * Fallback when orderSymbolCache has a miss (e.g. after restart with stale cache).
+   */
+  private async discoverOrderSymbol(orderId: string): Promise<string | null> {
+    try {
+      const openOrders = await this.exchange.fetchOpenOrders()
+      for (const o of openOrders) {
+        if (o.id && o.symbol) {
+          this.orderSymbolCache.set(o.id, o.symbol)
+        }
+      }
+      return this.orderSymbolCache.get(orderId) ?? null
+    } catch {
+      return null
     }
   }
 
@@ -523,14 +631,34 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.ensureInit()
 
     try {
-      const [balance, rawPositions] = await Promise.all([
-        this.exchange.fetchBalance(),
-        this.exchange.fetchPositions(),
-      ])
+      // @ai-context Fetch spot balance for exchanges with spot markets (e.g. Crypto.com).
+      // Derivatives-first exchanges skip this via overrides.skipSpotBalance.
+      const balance = await this.fetchSpotBalance()
 
-      const bal = balance as unknown as Record<string, Record<string, unknown>>
-      const free = parseFloat(String(bal['free']?.['USDT'] ?? bal['free']?.['USD'] ?? 0))
-      const used = parseFloat(String(bal['used']?.['USDT'] ?? bal['used']?.['USD'] ?? 0))
+      // Fetch derivative positions (may fail for spot-only exchanges)
+      let rawPositions: Awaited<ReturnType<Exchange['fetchPositions']>>
+      try {
+        rawPositions = await this.exchange.fetchPositions()
+      } catch {
+        rawPositions = []
+      }
+
+      // @ai-context Sum ALL stablecoin/USD free balances as cash.
+      // Previous code only checked USDT and USD, missing USDC/BUSD/DAI/TUSD.
+      const freeBal = (balance['free'] ?? {}) as Record<string, unknown>
+      const usedBal = (balance['used'] ?? {}) as Record<string, unknown>
+      let free = new Decimal(0)
+      let used = new Decimal(0)
+      for (const [currency, amount] of Object.entries(freeBal)) {
+        if (CASH_CURRENCIES.has(currency.toUpperCase()) && amount != null && Number(amount) !== 0) {
+          free = free.plus(new Decimal(String(amount)))
+        }
+      }
+      for (const [currency, amount] of Object.entries(usedBal)) {
+        if (CASH_CURRENCIES.has(currency.toUpperCase()) && amount != null && Number(amount) !== 0) {
+          used = used.plus(new Decimal(String(amount)))
+        }
+      }
 
       // Aggregate P&L and market value from positions.
       // We use position-level markPrice (which is fresh from the exchange's
@@ -552,18 +680,22 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       }
 
       // Reconstruct netLiquidation from fresh components:
-      //   netLiq = available cash + total position market value
+      //   netLiq = available cash + derivative position value + spot holdings value
       // This gives a real-time equity figure that tracks markPrice movements,
       // unlike balance.total which only updates on exchange settlement.
-      const netLiquidation = free + totalPositionValue
+      let spotHoldingsValue = 0
+      if (!this.overrides.skipSpotBalance) {
+        spotHoldingsValue = await this.getSpotHoldingsValue(balance)
+      }
+      const netLiquidation = free.toNumber() + totalPositionValue + spotHoldingsValue
 
       return {
         baseCurrency: 'USD',
         netLiquidation,
-        totalCashValue: free,
+        totalCashValue: free.toNumber(),
         unrealizedPnL,
         realizedPnL,
-        initMarginReq: used,
+        initMarginReq: used.toNumber(),
       }
     } catch (err) {
       throw BrokerError.from(err)
@@ -574,10 +706,16 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.ensureInit()
 
     try {
+      // ---- Derivatives positions (existing path) ----
       const fetchOverride = this.overrides.fetchPositions
-      const raw = fetchOverride
-        ? await fetchOverride(this.exchange, defaultFetchPositions)
-        : await defaultFetchPositions(this.exchange)
+      let raw: Awaited<ReturnType<typeof defaultFetchPositions>>
+      try {
+        raw = fetchOverride
+          ? await fetchOverride(this.exchange, defaultFetchPositions)
+          : await defaultFetchPositions(this.exchange)
+      } catch {
+        raw = [] // Spot-only exchanges may not support fetchPositions
+      }
       const result: Position[] = []
 
       for (const p of raw) {
@@ -608,6 +746,47 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         })
       }
 
+      // ---- Spot holdings → Position objects ----
+      // @ai-context Spot balances (e.g. CRO on Crypto.com) are invisible via fetchPositions.
+      // Convert non-zero, non-stablecoin spot balances into Position objects.
+      if (!this.overrides.skipSpotBalance) {
+        const hasSpot = Object.values(this.markets).some(m => m.type === 'spot')
+        if (hasSpot) {
+          const spotBalance = await this.fetchSpotBalance()
+
+          const totalBal = (spotBalance['total'] ?? {}) as Record<string, unknown>
+          for (const [currency, amount] of Object.entries(totalBal)) {
+            if (CASH_CURRENCIES.has(currency.toUpperCase())) continue
+            const qty = new Decimal(String(amount ?? 0))
+            if (qty.isZero() || qty.isNeg()) continue
+
+            const spotSymbol = this.findSpotMarket(currency)
+            if (!spotSymbol) continue
+            const market = this.markets[spotSymbol]
+            if (!market) continue
+
+            try {
+              const ticker = await this.fetchCachedTicker(spotSymbol)
+              const price = ticker.last ?? 0
+              const marketValue = qty.toNumber() * price
+              if (marketValue < 0.01) continue // Skip dust
+
+              result.push({
+                contract: marketToContract(market, this.exchangeName),
+                currency: normalizeQuoteCurrency(market.quote ?? 'USD'),
+                side: 'long',
+                quantity: qty,
+                avgCost: 0,
+                marketPrice: price,
+                marketValue,
+                unrealizedPnL: 0,
+                realizedPnL: 0,
+              })
+            } catch { /* skip if can't get price */ }
+          }
+        }
+      }
+
       return result
     } catch (err) {
       throw BrokerError.from(err)
@@ -629,8 +808,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   async getOrder(orderId: string): Promise<OpenOrder | null> {
     this.ensureInit()
 
-    const ccxtSymbol = this.orderSymbolCache.get(orderId)
-    if (!ccxtSymbol) return null
+    let ccxtSymbol: string | undefined = this.orderSymbolCache.get(orderId)
+
+    // @ai-context Cache miss fallback: scan open orders to discover the symbol.
+    // orderSymbolCache is in-memory and lost on restart; this recovers it.
+    if (!ccxtSymbol) {
+      ccxtSymbol = await this.discoverOrderSymbol(orderId) ?? undefined
+      if (!ccxtSymbol) return null
+    }
 
     const fetchOverride = this.overrides.fetchOrderById
     try {
@@ -734,6 +919,24 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     c.localSymbol = nativeKey
     c.symbol = nativeKey.split('/')[0] ?? nativeKey
     return c
+  }
+
+  // ---- Broker state persistence ----
+
+  /** @ai-context Export broker-specific state for persistence (orderSymbolCache). */
+  exportBrokerState(): { orderSymbolCache: Record<string, string> } {
+    return {
+      orderSymbolCache: Object.fromEntries(this.orderSymbolCache),
+    }
+  }
+
+  /** @ai-context Restore broker state from persisted data. Called before first use. */
+  loadBrokerState(state: { orderSymbolCache?: Record<string, string> }): void {
+    if (state.orderSymbolCache) {
+      for (const [k, v] of Object.entries(state.orderSymbolCache)) {
+        this.orderSymbolCache.set(k, v)
+      }
+    }
   }
 
   // ---- Provider-specific methods ----
