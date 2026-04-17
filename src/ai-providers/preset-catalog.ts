@@ -40,13 +40,14 @@ export const CLAUDE_OAUTH: PresetDef = {
   description: 'Use your Claude Pro/Max subscription',
   category: 'official',
   defaultName: 'Claude (Pro/Max)',
-  hint: 'Requires Claude Code CLI login. Run `claude login` in your terminal first.',
+  hint: 'Requires Claude Code CLI login — run `claude login` in your terminal first. Model is switchable here or from the profile list anytime; Opus is most capable but burns subscription quota faster, so consider Sonnet for routine work.',
   zodSchema: z.object({
     backend: z.literal('agent-sdk'),
     loginMethod: z.literal('claudeai'),
-    model: z.string().default('claude-sonnet-4-6').describe('Model'),
+    model: z.string().default('claude-opus-4-7').describe('Model'),
   }),
   models: [
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
   ],
@@ -58,13 +59,15 @@ export const CLAUDE_API: PresetDef = {
   description: 'Pay per token via Anthropic API',
   category: 'official',
   defaultName: 'Claude (API Key)',
+  hint: 'Model is switchable here or from the profile list anytime. Opus is ~5× the cost of Sonnet; Haiku is cheapest for high-volume work.',
   zodSchema: z.object({
     backend: z.literal('agent-sdk'),
     loginMethod: z.literal('api-key'),
-    model: z.string().default('claude-sonnet-4-6').describe('Model'),
+    model: z.string().default('claude-opus-4-7').describe('Model'),
     apiKey: z.string().min(1).describe('Anthropic API key'),
   }),
   models: [
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
     { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },

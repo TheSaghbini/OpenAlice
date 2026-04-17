@@ -21,7 +21,7 @@ const legacyLoginMethodSchema = z.enum(['api-key', 'claudeai', 'codex-oauth'])
 export const aiProviderLegacySchema = z.object({
   backend: z.enum(['claude-code', 'vercel-ai-sdk', 'agent-sdk', 'codex']).default('claude-code'),
   provider: z.string().default('anthropic'),
-  model: z.string().default('claude-sonnet-4-6'),
+  model: z.string().default('claude-opus-4-7'),
   baseUrl: z.string().min(1).optional(),
   loginMethod: legacyLoginMethodSchema.default('api-key'),
   apiKeys: z.object({
@@ -51,7 +51,7 @@ const baseProfileFields = {
 export const agentSdkProfileSchema = z.object({
   ...baseProfileFields,
   backend: z.literal('agent-sdk'),
-  model: z.string().default('claude-sonnet-4-6'),
+  model: z.string().default('claude-opus-4-7'),
   loginMethod: z.enum(['api-key', 'claudeai']).default('api-key'),
 })
 
@@ -66,7 +66,7 @@ export const vercelProfileSchema = z.object({
   ...baseProfileFields,
   backend: z.literal('vercel-ai-sdk'),
   provider: z.string().default('anthropic'),
-  model: z.string().default('claude-sonnet-4-6'),
+  model: z.string().default('claude-opus-4-7'),
 })
 
 export const profileSchema = z.discriminatedUnion('backend', [
@@ -81,7 +81,7 @@ export const aiProviderSchema = z.object({
     z.string(),
     profileSchema,
   ).default({
-    default: { backend: 'agent-sdk', model: 'claude-sonnet-4-6', loginMethod: 'claudeai' },
+    default: { backend: 'agent-sdk', model: 'claude-opus-4-7', loginMethod: 'claudeai' },
   }),
   activeProfile: z.string().default('default'),
 })
@@ -409,7 +409,7 @@ export async function loadConfig(): Promise<Config> {
         default: {
           backend: 'agent-sdk',
           label: 'Default',
-          model: (oldModel?.model as string) ?? 'claude-sonnet-4-6',
+          model: (oldModel?.model as string) ?? 'claude-opus-4-7',
           loginMethod: 'claudeai',
           provider: (oldModel?.provider as string) ?? 'anthropic',
         },

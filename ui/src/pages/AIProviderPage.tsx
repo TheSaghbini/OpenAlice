@@ -20,6 +20,15 @@ function getSchemaConst(schema: Preset['schema'], field: string): unknown {
   return props?.[field]?.const
 }
 
+function getModelOptions(profile: Profile, presets: Preset[]): Array<{ id: string; label: string }> {
+  const preset = presets.find(p => p.id === profile.preset)
+  if (!preset) return []
+  const props = preset.schema?.properties as Record<string, { oneOf?: Array<{ const: string; title: string }> }> | undefined
+  const oneOf = props?.model?.oneOf
+  if (!oneOf) return []
+  return oneOf.map(o => ({ id: o.const, label: o.title }))
+}
+
 // ==================== Main Page ====================
 
 export function AIProviderPage() {
@@ -60,6 +69,16 @@ export function AIProviderPage() {
     setProfiles((p) => p ? { ...p, [slug]: profile } : p)
   }
 
+  const handleInlineModelChange = async (slug: string, profile: Profile, newModel: string) => {
+    const updated = { ...profile, model: newModel }
+    setProfiles((p) => p ? { ...p, [slug]: updated } : p)
+    try {
+      await api.config.updateProfile(slug, updated)
+    } catch {
+      setProfiles((p) => p ? { ...p, [slug]: profile } : p)
+    }
+  }
+
   if (!profiles) return <div className="flex flex-col flex-1 min-h-0"><PageHeader title="AI Provider" description="Manage AI provider profiles." /><PageLoading /></div>
 
   return (
@@ -69,6 +88,8 @@ export function AIProviderPage() {
         <div className="max-w-[640px] mx-auto space-y-3">
           {Object.entries(profiles).map(([slug, profile]) => {
             const isActive = slug === activeProfile
+            const modelOptions = getModelOptions(profile, presets)
+            const canSwitchModel = modelOptions.length > 1 && modelOptions.some(o => o.id === profile.model)
             return (
               <div key={slug} className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${isActive ? 'border-accent bg-accent-dim/20' : 'border-border bg-bg'}`}>
                 <div className="text-text-muted">{BACKEND_ICONS[profile.backend]}</div>
@@ -77,7 +98,21 @@ export function AIProviderPage() {
                     <span className="text-[13px] font-semibold text-text truncate">{slug}</span>
                     {isActive && <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/20 text-accent font-medium shrink-0">Active</span>}
                   </div>
-                  <p className="text-[11px] text-text-muted truncate">{profile.model || 'Auto (subscription plan)'}</p>
+                  {canSwitchModel ? (
+                    <div className="relative inline-flex items-center group -ml-1">
+                      <select
+                        value={profile.model}
+                        onChange={(e) => handleInlineModelChange(slug, profile, e.target.value)}
+                        className="appearance-none text-[11px] text-text-muted bg-transparent border-0 cursor-pointer hover:text-accent focus:text-accent focus:outline-none pl-1 pr-4 py-0.5 rounded hover:bg-bg-tertiary transition-colors"
+                        title="Change model"
+                      >
+                        {modelOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                      </select>
+                      <svg className="pointer-events-none absolute right-1 w-3 h-3 text-text-muted group-hover:text-accent transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-text-muted truncate">{profile.model || 'Auto (subscription plan)'}</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {!isActive && <button onClick={() => handleSetActive(slug)} className="text-[11px] px-2 py-1 rounded-md border border-border text-text-muted hover:text-accent hover:border-accent transition-colors">Set Default</button>}

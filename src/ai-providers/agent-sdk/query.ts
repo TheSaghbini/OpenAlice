@@ -151,7 +151,7 @@ export async function askAgentSdk(
       options: {
         cwd,
         env,
-        model: override?.model ?? 'claude-sonnet-4-6',
+        model: override?.model ?? 'claude-opus-4-7',
         maxTurns,
         allowedTools: finalAllowed,
         disallowedTools: finalDisallowed,
