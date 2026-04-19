@@ -157,6 +157,31 @@ export const MINIMAX: PresetDef = {
   writeOnlyFields: ['apiKey'],
 }
 
+// ==================== Third-party: GLM (Zhipu) ====================
+
+export const GLM: PresetDef = {
+  id: 'glm',
+  label: 'GLM (Zhipu)',
+  description: 'Zhipu GLM models via Claude Agent SDK (Anthropic-compatible)',
+  category: 'third-party',
+  defaultName: 'GLM',
+  hint: 'Get your API key at bigmodel.cn',
+  zodSchema: z.object({
+    backend: z.literal('agent-sdk'),
+    loginMethod: z.literal('api-key'),
+    baseUrl: z.literal('https://open.bigmodel.cn/api/anthropic').describe('GLM API endpoint'),
+    model: z.string().default('glm-5.1').describe('Model'),
+    apiKey: z.string().min(1).describe('GLM API key'),
+  }),
+  models: [
+    { id: 'glm-5.1', label: 'GLM 5.1' },
+    { id: 'glm-4.7', label: 'GLM 4.7' },
+    { id: 'glm-4.6', label: 'GLM 4.6 (200K context)' },
+    { id: 'glm-4.5-air', label: 'GLM 4.5 Air' },
+  ],
+  writeOnlyFields: ['apiKey'],
+}
+
 // ==================== Custom ====================
 
 export const CUSTOM: PresetDef = {
@@ -185,5 +210,6 @@ export const PRESET_CATALOG: PresetDef[] = [
   CODEX_API,
   GEMINI,
   MINIMAX,
+  GLM,
   CUSTOM,
 ]
