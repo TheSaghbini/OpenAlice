@@ -11,7 +11,7 @@
 import { z } from 'zod'
 import Alpaca from '@alpacahq/alpaca-trade-api'
 import Decimal from 'decimal.js'
-import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL } from '@traderalice/ibkr'
 import {
   BrokerError,
   type IBroker,
@@ -193,23 +193,25 @@ export class AlpacaBroker implements IBroker {
       }
 
       // Quantity: totalQuantity or cashQty (notional)
+      // Alpaca REST accepts numeric strings — preferred over .toNumber()
+      // to avoid IEEE 754 noise for satoshi-scale values.
       if (!order.totalQuantity.equals(UNSET_DECIMAL)) {
-        alpacaOrder.qty = parseFloat(order.totalQuantity.toString())
-      } else if (order.cashQty !== UNSET_DOUBLE) {
-        alpacaOrder.notional = order.cashQty
+        alpacaOrder.qty = order.totalQuantity.toFixed()
+      } else if (!order.cashQty.equals(UNSET_DECIMAL)) {
+        alpacaOrder.notional = order.cashQty.toFixed()
       }
 
       // Prices
-      if (order.lmtPrice !== UNSET_DOUBLE) alpacaOrder.limit_price = order.lmtPrice
-      if (order.auxPrice !== UNSET_DOUBLE) {
+      if (!order.lmtPrice.equals(UNSET_DECIMAL)) alpacaOrder.limit_price = order.lmtPrice.toFixed()
+      if (!order.auxPrice.equals(UNSET_DECIMAL)) {
         // auxPrice is stop price for STP, trailing offset for TRAIL
         if (order.orderType === 'TRAIL') {
-          alpacaOrder.trail_price = order.auxPrice
+          alpacaOrder.trail_price = order.auxPrice.toFixed()
         } else {
-          alpacaOrder.stop_price = order.auxPrice
+          alpacaOrder.stop_price = order.auxPrice.toFixed()
         }
       }
-      if (order.trailingPercent !== UNSET_DOUBLE) alpacaOrder.trail_percent = order.trailingPercent
+      if (!order.trailingPercent.equals(UNSET_DECIMAL)) alpacaOrder.trail_percent = order.trailingPercent.toFixed()
       if (order.outsideRth) alpacaOrder.extended_hours = true
 
       // Bracket order (TPSL)
@@ -240,10 +242,10 @@ export class AlpacaBroker implements IBroker {
   async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
     try {
       const patch: Record<string, unknown> = {}
-      if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
-      if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
-      if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
-      if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
+      if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = changes.totalQuantity.toFixed()
+      if (changes.lmtPrice != null && !changes.lmtPrice.equals(UNSET_DECIMAL)) patch.limit_price = changes.lmtPrice.toFixed()
+      if (changes.auxPrice != null && !changes.auxPrice.equals(UNSET_DECIMAL)) patch.stop_price = changes.auxPrice.toFixed()
+      if (changes.trailingPercent != null && !changes.trailingPercent.equals(UNSET_DECIMAL)) patch.trail = changes.trailingPercent.toFixed()
       if (changes.tif) patch.time_in_force = ibkrTifToAlpaca(changes.tif)
 
       const result = await this.client.replaceOrder(orderId, patch) as AlpacaOrderRaw
@@ -316,14 +318,14 @@ export class AlpacaBroker implements IBroker {
       const unrealizedPnL = positions.reduce(
         (sum, p) => sum.plus(new Decimal(p.unrealized_pl)),
         new Decimal(0),
-      ).toNumber()
+      )
 
       return {
         baseCurrency: 'USD',
-        netLiquidation: parseFloat(account.equity),
-        totalCashValue: parseFloat(account.cash),
-        unrealizedPnL,
-        buyingPower: parseFloat(account.buying_power),
+        netLiquidation: new Decimal(account.equity).toString(),
+        totalCashValue: new Decimal(account.cash).toString(),
+        unrealizedPnL: unrealizedPnL.toString(),
+        buyingPower: new Decimal(account.buying_power).toString(),
         dayTradesRemaining: account.daytrade_count != null ? Math.max(0, 3 - account.daytrade_count) : undefined,
       }
     } catch (err) {
@@ -340,11 +342,11 @@ export class AlpacaBroker implements IBroker {
         currency: 'USD',
         side: p.side === 'long' ? 'long' as const : 'short' as const,
         quantity: new Decimal(p.qty),
-        avgCost: parseFloat(p.avg_entry_price),
-        marketPrice: parseFloat(p.current_price),
-        marketValue: Math.abs(parseFloat(p.market_value)),
-        unrealizedPnL: parseFloat(p.unrealized_pl),
-        realizedPnL: 0,
+        avgCost: new Decimal(p.avg_entry_price).toString(),
+        marketPrice: new Decimal(p.current_price).toString(),
+        marketValue: new Decimal(p.market_value).abs().toString(),
+        unrealizedPnL: new Decimal(p.unrealized_pl).toString(),
+        realizedPnL: '0',
       }))
     } catch (err) {
       throw BrokerError.from(err)
@@ -432,8 +434,8 @@ export class AlpacaBroker implements IBroker {
     order.action = o.side.toUpperCase() // buy → BUY
     order.totalQuantity = new Decimal(o.qty ?? o.notional ?? '0')
     order.orderType = (o.type ?? 'market').toUpperCase()
-    if (o.limit_price) order.lmtPrice = parseFloat(o.limit_price)
-    if (o.stop_price) order.auxPrice = parseFloat(o.stop_price)
+    if (o.limit_price) order.lmtPrice = new Decimal(o.limit_price)
+    if (o.stop_price) order.auxPrice = new Decimal(o.stop_price)
     if (o.time_in_force) order.tif = o.time_in_force.toUpperCase()
     if (o.extended_hours) order.outsideRth = true
     // Alpaca order IDs are UUIDs — IBKR's orderId field is number, so leave at default 0.

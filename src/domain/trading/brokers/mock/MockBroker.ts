@@ -10,7 +10,7 @@
 
 import { z } from 'zod'
 import Decimal from 'decimal.js'
-import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL, UNSET_DOUBLE } from '@traderalice/ibkr'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type {
   IBroker,
   AccountCapabilities,
@@ -60,11 +60,11 @@ export interface MockBrokerOptions {
 
 export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
   baseCurrency: 'USD',
-  netLiquidation: 105_000,
-  totalCashValue: 100_000,
-  unrealizedPnL: 5_000,
-  realizedPnL: 1_000,
-  buyingPower: 200_000,
+  netLiquidation: '105000',
+  totalCashValue: '100000',
+  unrealizedPnL: '5000',
+  realizedPnL: '1000',
+  buyingPower: '200000',
 }
 
 export const DEFAULT_CAPABILITIES: AccountCapabilities = {
@@ -91,11 +91,11 @@ export function makePosition(overrides: Partial<Position> = {}): Position {
     currency: contract.currency || 'USD',
     side: 'long',
     quantity: new Decimal(10),
-    avgCost: 150,
-    marketPrice: 160,
-    marketValue: 1600,
-    unrealizedPnL: 100,
-    realizedPnL: 0,
+    avgCost: '150',
+    marketPrice: '160',
+    marketValue: '1600',
+    unrealizedPnL: '100',
+    realizedPnL: '0',
     ...overrides,
   }
 }
@@ -156,7 +156,7 @@ export class MockBroker implements IBroker {
     this._cash = new Decimal(options.cash ?? 100_000)
     if (options.accountInfo) {
       this._accountOverride = {
-        baseCurrency: 'USD', netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
+        baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
         ...options.accountInfo,
       }
     }
@@ -275,16 +275,16 @@ export class MockBroker implements IBroker {
     if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) {
       internal.order.totalQuantity = changes.totalQuantity
     }
-    if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) {
+    if (changes.lmtPrice != null && !changes.lmtPrice.equals(UNSET_DECIMAL)) {
       internal.order.lmtPrice = changes.lmtPrice
     }
-    if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) {
+    if (changes.auxPrice != null && !changes.auxPrice.equals(UNSET_DECIMAL)) {
       internal.order.auxPrice = changes.auxPrice
     }
-    if (changes.trailStopPrice != null && changes.trailStopPrice !== UNSET_DOUBLE) {
+    if (changes.trailStopPrice != null && !changes.trailStopPrice.equals(UNSET_DECIMAL)) {
       internal.order.trailStopPrice = changes.trailStopPrice
     }
-    if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) {
+    if (changes.trailingPercent != null && !changes.trailingPercent.equals(UNSET_DECIMAL)) {
       internal.order.trailingPercent = changes.trailingPercent
     }
     if (changes.orderType) internal.order.orderType = changes.orderType
@@ -330,22 +330,23 @@ export class MockBroker implements IBroker {
     this._checkFail('getAccount')
     if (this._accountOverride) return this._accountOverride
 
-    let unrealizedPnL = 0
-    let marketValue = 0
+    let unrealizedPnL = new Decimal(0)
+    let marketValueAcc = new Decimal(0)
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
-      const posValue = pos.quantity.toNumber() * price
-      marketValue += posValue
-      unrealizedPnL += pos.quantity.toNumber() * (price - pos.avgCost.toNumber())
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
+      const posValue = pos.quantity.mul(price)
+      marketValueAcc = marketValueAcc.plus(posValue)
+      unrealizedPnL = unrealizedPnL.plus(pos.quantity.mul(price.minus(pos.avgCost)))
     }
 
-    const cash = this._cash.toNumber()
     return {
       baseCurrency: 'USD',
-      netLiquidation: cash + marketValue,
-      totalCashValue: cash,
-      unrealizedPnL,
-      realizedPnL: this._realizedPnL.toNumber(),
+      netLiquidation: this._cash.plus(marketValueAcc).toString(),
+      totalCashValue: this._cash.toString(),
+      unrealizedPnL: unrealizedPnL.toString(),
+      realizedPnL: this._realizedPnL.toString(),
     }
   }
 
@@ -354,17 +355,19 @@ export class MockBroker implements IBroker {
     this._checkFail('getPositions')
     const result: Position[] = []
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
       result.push({
         contract: pos.contract,
         currency: pos.contract.currency || 'USD',
         side: pos.side,
         quantity: pos.quantity,
-        avgCost: pos.avgCost.toNumber(),
-        marketPrice: price,
-        marketValue: pos.quantity.toNumber() * price,
-        unrealizedPnL: pos.quantity.toNumber() * (price - pos.avgCost.toNumber()),
-        realizedPnL: 0,
+        avgCost: pos.avgCost.toString(),
+        marketPrice: price.toString(),
+        marketValue: pos.quantity.mul(price).toString(),
+        unrealizedPnL: pos.quantity.mul(price.minus(pos.avgCost)).toString(),
+        realizedPnL: '0',
       })
     }
     return result
@@ -484,7 +487,7 @@ export class MockBroker implements IBroker {
   /** Override account info directly. Bypasses computed values from positions. */
   setAccountInfo(info: Partial<AccountInfo>): void {
     const base: AccountInfo = {
-      baseCurrency: 'USD', netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
+      baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
       ...this._accountOverride,
     }
     Object.assign(base, info)
@@ -537,8 +540,8 @@ export class MockBroker implements IBroker {
     o.orderType = order.orderType
     o.totalQuantity = order.totalQuantity
     o.tif = order.tif
-    if (order.lmtPrice !== UNSET_DOUBLE) o.lmtPrice = order.lmtPrice
-    if (order.auxPrice !== UNSET_DOUBLE) o.auxPrice = order.auxPrice
+    if (!order.lmtPrice.equals(UNSET_DECIMAL)) o.lmtPrice = order.lmtPrice
+    if (!order.auxPrice.equals(UNSET_DECIMAL)) o.auxPrice = order.auxPrice
     o.orderId = parseInt(orderId.replace('mock-ord-', ''), 10) || 0
     return o
   }

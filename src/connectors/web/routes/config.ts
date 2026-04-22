@@ -127,6 +127,14 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       }
       const body = await c.req.json()
       const validated = await writeConfigSection(section, body)
+      // Keep the in-memory ctx.config in sync with disk so any code path
+      // reading it (opentypebb resolver, market-data helpers, …) picks up
+      // edits without a restart. Object.assign preserves ctx.config's
+      // object identity — we just swap its contents.
+      if (opts?.ctx) {
+        const fresh = await loadConfig()
+        Object.assign(opts.ctx.config, fresh)
+      }
       // Hot-reload connectors / OpenBB server when their config changes
       if (section === 'connectors' || section === 'marketData') {
         await opts?.onConnectorsChange?.()

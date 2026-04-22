@@ -10,7 +10,7 @@ import { z } from 'zod'
 import ccxt from 'ccxt'
 import Decimal from 'decimal.js'
 import type { Exchange, Order as CcxtOrder } from 'ccxt'
-import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL } from '@traderalice/ibkr'
 import {
   BrokerError,
   type IBroker,
@@ -51,6 +51,20 @@ const CASH_CURRENCIES = new Set([...STABLECOIN_TO_USD, 'USD'])
 /** Normalize stablecoin quote currencies to 'USD' so they don't trigger FX conversion. */
 function normalizeQuoteCurrency(quote: string): string {
   return STABLECOIN_TO_USD.has(quote.toUpperCase()) ? 'USD' : quote
+}
+
+function getOrderDecimal(value: unknown): Decimal | null {
+  if (value == null) return null
+  if (value instanceof Decimal) {
+    return value.equals(UNSET_DECIMAL) ? null : value
+  }
+  if (typeof value === 'number') {
+    return value === Number.MAX_VALUE ? null : new Decimal(value)
+  }
+  if (typeof value === 'string' && value !== '') {
+    return new Decimal(value)
+  }
+  return null
 }
 
 /** Map IBKR orderType codes to CCXT order type strings. */
@@ -479,19 +493,26 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       return { success: false, error: 'Cannot resolve contract to CCXT symbol' }
     }
 
-    // Use toString() to preserve Decimal precision — never go through IEEE 754 float
-    let size: string | undefined = !order.totalQuantity.equals(UNSET_DECIMAL)
-      ? order.totalQuantity.toString()
+    // Use toFixed() to preserve Decimal precision across any scale.
+    // toString() would emit scientific notation for small values.
+    const totalQuantity = getOrderDecimal(order.totalQuantity)
+    const cashQty = getOrderDecimal(order.cashQty)
+    const limitPrice = getOrderDecimal(order.lmtPrice)
+
+    let size: string | undefined = totalQuantity
+      ? totalQuantity.toFixed()
       : undefined
 
     // cashQty (notional) → size conversion
-    if (!size && order.cashQty !== UNSET_DOUBLE && order.cashQty > 0) {
+    if (!size && cashQty?.gt(0)) {
       const ticker = await this.exchange.fetchTicker(ccxtSymbol)
-      const price = order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : ticker.last
-      if (!price) {
+      const price = limitPrice
+        ? limitPrice
+        : ticker.last != null ? new Decimal(ticker.last) : null
+      if (!price || price.isZero()) {
         return { success: false, error: 'Cannot determine price for notional conversion' }
       }
-      size = String(order.cashQty / price)
+      size = cashQty.div(price).toFixed()
     }
 
     if (!size) {
@@ -513,8 +534,9 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
-      const refPrice = ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE
-        ? order.lmtPrice
+      // CCXT SDK expects number for price — convert at the wire boundary.
+      const refPrice = ccxtOrderType === 'limit' && limitPrice
+        ? limitPrice.toNumber()
         : undefined
 
       const placeOverride = this.overrides.placeOrder
@@ -570,14 +592,19 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       const original = fetchOverride
         ? await fetchOverride(this.exchange, orderId, ccxtSymbol, defaultFetchOrderById)
         : await defaultFetchOrderById(this.exchange, orderId, ccxtSymbol)
-      const qty = changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL) ? parseFloat(changes.totalQuantity.toString()) : original.amount
-      const price = changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
+      const totalQuantity = getOrderDecimal(changes.totalQuantity)
+      const limitPrice = getOrderDecimal(changes.lmtPrice)
+      const auxPrice = getOrderDecimal(changes.auxPrice)
+      const trailStopPrice = getOrderDecimal(changes.trailStopPrice)
+      const trailingPercent = getOrderDecimal(changes.trailingPercent)
+      const qty = totalQuantity ? totalQuantity.toNumber() : original.amount
+      const price = limitPrice ? limitPrice.toNumber() : original.price
 
       // Extra params for fields that don't fit editOrder's positional arguments
       const params: Record<string, unknown> = {}
-      if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) params.stopPrice = changes.auxPrice
-      if (changes.trailStopPrice != null && changes.trailStopPrice !== UNSET_DOUBLE) params.trailStopPrice = changes.trailStopPrice
-      if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) params.trailingPercent = changes.trailingPercent
+      if (auxPrice) params.stopPrice = auxPrice.toNumber()
+      if (trailStopPrice) params.trailStopPrice = trailStopPrice.toNumber()
+      if (trailingPercent) params.trailingPercent = trailingPercent.toNumber()
       if (changes.tif) params.timeInForce = changes.tif.toLowerCase()
 
       const result = await this.exchange.editOrder(
@@ -664,38 +691,38 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       // We use position-level markPrice (which is fresh from the exchange's
       // websocket feed) rather than balance.total (which is a cached wallet
       // snapshot that may not update between funding/settlement cycles).
-      let unrealizedPnL = 0
-      let realizedPnL = 0
-      let totalPositionValue = 0
+      let unrealizedPnL = new Decimal(0)
+      let realizedPnL = new Decimal(0)
+      let totalPositionValue = new Decimal(0)
       for (const p of rawPositions) {
-        unrealizedPnL += parseFloat(String(p.unrealizedPnl ?? 0))
-        realizedPnL += parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0))
+        unrealizedPnL = unrealizedPnL.plus(new Decimal(String(p.unrealizedPnl ?? 0)))
+        realizedPnL = realizedPnL.plus(new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)))
 
         // Compute position market value from fresh markPrice
         const contracts = new Decimal(String(p.contracts ?? 0)).abs()
         const contractSize = new Decimal(String(p.contractSize ?? 1))
         const quantity = contracts.mul(contractSize)
-        const markPrice = parseFloat(String(p.markPrice ?? 0))
-        totalPositionValue += quantity.toNumber() * markPrice
+        const markPrice = new Decimal(String(p.markPrice ?? 0))
+        totalPositionValue = totalPositionValue.plus(quantity.mul(markPrice))
       }
 
       // Reconstruct netLiquidation from fresh components:
       //   netLiq = available cash + derivative position value + spot holdings value
       // This gives a real-time equity figure that tracks markPrice movements,
       // unlike balance.total which only updates on exchange settlement.
-      let spotHoldingsValue = 0
+      let spotHoldingsValue = new Decimal(0)
       if (!this.overrides.skipSpotBalance) {
-        spotHoldingsValue = await this.getSpotHoldingsValue(balance)
+        spotHoldingsValue = new Decimal(await this.getSpotHoldingsValue(balance))
       }
-      const netLiquidation = free.toNumber() + totalPositionValue + spotHoldingsValue
+      const netLiquidation = free.plus(totalPositionValue).plus(spotHoldingsValue)
 
       return {
         baseCurrency: 'USD',
-        netLiquidation,
-        totalCashValue: free.toNumber(),
-        unrealizedPnL,
-        realizedPnL,
-        initMarginReq: used.toNumber(),
+        netLiquidation: netLiquidation.toString(),
+        totalCashValue: free.toString(),
+        unrealizedPnL: unrealizedPnL.toString(),
+        realizedPnL: realizedPnL.toString(),
+        initMarginReq: used.toString(),
       }
     } catch (err) {
       throw BrokerError.from(err)
@@ -728,21 +755,21 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         const quantity = contracts.mul(contractSize)
         if (quantity.isZero()) continue
 
-        const markPrice = parseFloat(String(p.markPrice ?? 0))
-        const entryPrice = parseFloat(String(p.entryPrice ?? 0))
-        const marketValue = quantity.toNumber() * markPrice
-        const unrealizedPnL = parseFloat(String(p.unrealizedPnl ?? 0))
+        const markPrice = new Decimal(String(p.markPrice ?? 0))
+        const entryPrice = new Decimal(String(p.entryPrice ?? 0))
+        const marketValue = quantity.mul(markPrice)
+        const unrealizedPnL = new Decimal(String(p.unrealizedPnl ?? 0))
 
         result.push({
           contract: marketToContract(market, this.exchangeName),
           currency: normalizeQuoteCurrency(market.quote ?? 'USDT'),
           side: p.side === 'long' ? 'long' : 'short',
           quantity,
-          avgCost: entryPrice,
-          marketPrice: markPrice,
-          marketValue,
-          unrealizedPnL,
-          realizedPnL: parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)),
+          avgCost: entryPrice.toString(),
+          marketPrice: markPrice.toString(),
+          marketValue: marketValue.toString(),
+          unrealizedPnL: unrealizedPnL.toString(),
+          realizedPnL: new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)).toString(),
         })
       }
 
@@ -842,7 +869,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     order.action = (o.side ?? 'buy').toUpperCase()
     order.totalQuantity = new Decimal(o.amount ?? 0)
     order.orderType = (o.type ?? 'market').toUpperCase()
-    if (o.price != null) order.lmtPrice = o.price
+    if (o.price != null) order.lmtPrice = new Decimal(o.price)
     order.orderId = parseInt(o.id, 10) || 0
 
     const tp = o.takeProfitPrice

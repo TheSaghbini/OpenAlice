@@ -124,6 +124,36 @@ export interface ConnectorsConfig {
   }
 }
 
+// ==================== Topology ====================
+
+export interface TopologyEventType {
+  name: string
+  external: boolean
+  description?: string
+}
+
+export interface TopologyListener {
+  name: string
+  subscribes: string[]
+  emits: string[]
+  /** True if declared as wildcard '*' — UI renders an aura instead of N edges. */
+  subscribesWildcard: boolean
+  /** Same for emits. */
+  emitsWildcard: boolean
+}
+
+export interface TopologyProducer {
+  name: string
+  emits: string[]
+  emitsWildcard: boolean
+}
+
+export interface TopologyResponse {
+  eventTypes: TopologyEventType[]
+  producers: TopologyProducer[]
+  listeners: TopologyListener[]
+}
+
 // ==================== News Collector ====================
 
 export interface NewsCollectorFeed {
@@ -131,6 +161,8 @@ export interface NewsCollectorFeed {
   url: string
   source: string
   categories?: string[]
+  description?: string
+  enabled?: boolean
 }
 
 export interface NewsCollectorConfig {
@@ -139,6 +171,23 @@ export interface NewsCollectorConfig {
   maxInMemory: number
   retentionDays: number
   feeds: NewsCollectorFeed[]
+}
+
+// ==================== News Articles ====================
+
+export interface NewsArticle {
+  time: string
+  title: string
+  content: string
+  source: string | null
+  link: string | null
+  categories: string | null
+}
+
+export interface NewsListResponse {
+  items: NewsArticle[]
+  count: number
+  lookback: string
 }
 
 // ==================== Events ====================
@@ -203,13 +252,13 @@ export interface TradingAccount {
 
 export interface AccountInfo {
   baseCurrency: string
-  netLiquidation: number
-  totalCashValue: number
-  unrealizedPnL: number
-  realizedPnL: number
-  buyingPower?: number
-  initMarginReq?: number
-  maintMarginReq?: number
+  netLiquidation: string
+  totalCashValue: string
+  unrealizedPnL: string
+  realizedPnL: string
+  buyingPower?: string
+  initMarginReq?: string
+  maintMarginReq?: string
 }
 
 export interface Position {
@@ -229,11 +278,12 @@ export interface Position {
   currency: string
   side: 'long' | 'short'
   quantity: string // Decimal serialized as string
-  avgCost: number
-  marketPrice: number
-  marketValue: number
-  unrealizedPnL: number
-  realizedPnL: number
+  /** All monetary fields are strings to prevent IEEE 754 floating-point artifacts. */
+  avgCost: string
+  marketPrice: string
+  marketValue: string
+  unrealizedPnL: string
+  realizedPnL: string
 }
 
 export interface WalletCommitLog {

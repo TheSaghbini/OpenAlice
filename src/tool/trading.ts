@@ -8,7 +8,8 @@
 
 import { tool, type Tool } from 'ai'
 import { z } from 'zod'
-import { Contract, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import Decimal from 'decimal.js'
+import { Contract, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type { AccountManager } from '@/domain/trading/account-manager.js'
 import { BrokerError, type OpenOrder } from '@/domain/trading/brokers/types.js'
 import type { FxService } from '@/domain/trading/fx-service.js'
@@ -27,9 +28,29 @@ function handleBrokerError(err: unknown): { error: string; code: string; transie
   }
 }
 
+function getOrderDecimal(value: unknown): Decimal | null {
+  if (value == null) return null
+  if (value instanceof Decimal) {
+    return value.equals(UNSET_DECIMAL) ? null : value
+  }
+  if (typeof value === 'number') {
+    return value === Number.MAX_VALUE ? null : new Decimal(value)
+  }
+  if (typeof value === 'string' && value !== '') {
+    return new Decimal(value)
+  }
+  return null
+}
+
 /** Summarize an OpenOrder into a compact object for AI consumption. */
 function summarizeOrder(o: OpenOrder, source: string, stringOrderId?: string) {
   const order = o.order
+  const totalQuantity = getOrderDecimal(order.totalQuantity)
+  const lmtPrice = getOrderDecimal(order.lmtPrice)
+  const auxPrice = getOrderDecimal(order.auxPrice)
+  const trailStopPrice = getOrderDecimal(order.trailStopPrice)
+  const trailingPercent = getOrderDecimal(order.trailingPercent)
+  const filledQuantity = getOrderDecimal(order.filledQuantity)
   return {
     source,
     orderId: stringOrderId ?? String(order.orderId),
@@ -37,14 +58,14 @@ function summarizeOrder(o: OpenOrder, source: string, stringOrderId?: string) {
     symbol: o.contract.symbol || o.contract.localSymbol || '',
     action: order.action,
     orderType: order.orderType,
-    totalQuantity: order.totalQuantity.equals(UNSET_DECIMAL) ? '0' : order.totalQuantity.toString(),
+    totalQuantity: totalQuantity?.toFixed() ?? '0',
     status: o.orderState.status,
-    ...(order.lmtPrice !== UNSET_DOUBLE && { lmtPrice: order.lmtPrice }),
-    ...(order.auxPrice !== UNSET_DOUBLE && { auxPrice: order.auxPrice }),
-    ...(order.trailStopPrice !== UNSET_DOUBLE && { trailStopPrice: order.trailStopPrice }),
-    ...(order.trailingPercent !== UNSET_DOUBLE && { trailingPercent: order.trailingPercent }),
+    ...(lmtPrice && { lmtPrice: lmtPrice.toFixed() }),
+    ...(auxPrice && { auxPrice: auxPrice.toFixed() }),
+    ...(trailStopPrice && { trailStopPrice: trailStopPrice.toFixed() }),
+    ...(trailingPercent && { trailingPercent: trailingPercent.toFixed() }),
     ...(order.tif && { tif: order.tif }),
-    ...(!order.filledQuantity.equals(UNSET_DECIMAL) && { filledQuantity: order.filledQuantity.toString() }),
+    ...(filledQuantity && { filledQuantity: filledQuantity.toString() }),
     ...(o.avgFillPrice != null && { avgFillPrice: o.avgFillPrice }),
     ...(order.parentId !== 0 && { parentId: order.parentId }),
     ...(order.ocaGroup && { ocaGroup: order.ocaGroup }),
@@ -59,6 +80,24 @@ const sourceDesc = (required: boolean, extra?: string) => {
     : ' Optional — omit to query all accounts.'
   return base + req + (extra ? ` ${extra}` : '')
 }
+
+/**
+ * Numeric field that accepts either a JS number or a decimal string.
+ * String form preserves precision beyond JS double (crypto satoshi-scale).
+ * Internal pipeline wraps to Decimal regardless.
+ */
+const positiveNumeric = z
+  .union([z.number(), z.string()])
+  .refine(
+    (v) => {
+      try {
+        return new Decimal(String(v)).gt(0) && new Decimal(String(v)).isFinite()
+      } catch {
+        return false
+      }
+    },
+    { message: 'must be a positive number or positive numeric string' },
+  )
 
 export function createTradingTools(
   manager: AccountManager,
@@ -153,35 +192,35 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
             const accountInfo = await uta.getAccount()
 
             // Convert position market values to USD for cross-currency percentage calculations
-            let totalMarketValueUsd = 0
-            const posUsdValues: number[] = []
+            let totalMarketValueUsd = new Decimal(0)
+            const posUsdValues: Decimal[] = []
             for (const pos of positions) {
               if (fxService && pos.currency !== 'USD') {
                 const r = await fxService.convertToUsd(pos.marketValue, pos.currency)
-                posUsdValues.push(r.usd)
+                posUsdValues.push(new Decimal(r.usd))
                 if (r.fxWarning && !fxWarnings.includes(r.fxWarning)) fxWarnings.push(r.fxWarning)
               } else {
-                posUsdValues.push(pos.marketValue)
+                posUsdValues.push(new Decimal(pos.marketValue))
               }
-              totalMarketValueUsd += posUsdValues[posUsdValues.length - 1]
+              totalMarketValueUsd = totalMarketValueUsd.plus(posUsdValues[posUsdValues.length - 1])
             }
 
             // Account netLiq in USD for equity percentage
-            let netLiqUsd = accountInfo.netLiquidation
+            let netLiqUsd = new Decimal(accountInfo.netLiquidation)
             if (fxService && accountInfo.baseCurrency !== 'USD') {
               const r = await fxService.convertToUsd(accountInfo.netLiquidation, accountInfo.baseCurrency)
-              netLiqUsd = r.usd
+              netLiqUsd = new Decimal(r.usd)
             }
 
             let idx = 0
             for (const pos of positions) {
               if (symbol && symbol !== 'all' && pos.contract.symbol !== symbol) { idx++; continue }
               const mvUsd = posUsdValues[idx]
-              const percentOfEquity = netLiqUsd > 0 ? (mvUsd / netLiqUsd) * 100 : 0
-              const percentOfPortfolio = totalMarketValueUsd > 0 ? (mvUsd / totalMarketValueUsd) * 100 : 0
+              const percentOfEquity = netLiqUsd.gt(0) ? mvUsd.div(netLiqUsd).mul(100) : new Decimal(0)
+              const percentOfPortfolio = totalMarketValueUsd.gt(0) ? mvUsd.div(totalMarketValueUsd).mul(100) : new Decimal(0)
               allPositions.push({
                 source: uta.id, symbol: pos.contract.symbol, currency: pos.currency, side: pos.side,
-                quantity: pos.quantity.toNumber(), avgCost: pos.avgCost, marketPrice: pos.marketPrice,
+                quantity: pos.quantity.toString(), avgCost: pos.avgCost, marketPrice: pos.marketPrice,
                 marketValue: pos.marketValue, unrealizedPnL: pos.unrealizedPnL, realizedPnL: pos.realizedPnL,
                 percentageOfEquity: `${percentOfEquity.toFixed(1)}%`,
                 percentageOfPortfolio: `${percentOfPortfolio.toFixed(1)}%`,
@@ -350,12 +389,12 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
         symbol: z.string().optional().describe('Human-readable symbol (optional, for display only)'),
         action: z.enum(['BUY', 'SELL']).describe('Order direction'),
         orderType: z.enum(['MKT', 'LMT', 'STP', 'STP LMT', 'TRAIL', 'TRAIL LIMIT', 'MOC']).describe('Order type'),
-        totalQuantity: z.number().positive().optional().describe('Number of shares/contracts (mutually exclusive with cashQty)'),
-        cashQty: z.number().positive().optional().describe('Notional dollar amount (mutually exclusive with totalQuantity)'),
-        lmtPrice: z.number().positive().optional().describe('Limit price (required for LMT, STP LMT, TRAIL LIMIT)'),
-        auxPrice: z.number().positive().optional().describe('Stop trigger price for STP/STP LMT; trailing offset amount for TRAIL/TRAIL LIMIT'),
-        trailStopPrice: z.number().positive().optional().describe('Initial trailing stop price (TRAIL/TRAIL LIMIT only)'),
-        trailingPercent: z.number().positive().optional().describe('Trailing stop percentage offset (alternative to auxPrice for TRAIL)'),
+        totalQuantity: positiveNumeric.optional().describe('Number of shares/contracts (mutually exclusive with cashQty). Accepts number or decimal string.'),
+        cashQty: positiveNumeric.optional().describe('Notional dollar amount (mutually exclusive with totalQuantity).'),
+        lmtPrice: positiveNumeric.optional().describe('Limit price (required for LMT, STP LMT, TRAIL LIMIT). Accepts number or decimal string for satoshi-scale prices.'),
+        auxPrice: positiveNumeric.optional().describe('Stop trigger price for STP/STP LMT; trailing offset amount for TRAIL/TRAIL LIMIT.'),
+        trailStopPrice: positiveNumeric.optional().describe('Initial trailing stop price (TRAIL/TRAIL LIMIT only).'),
+        trailingPercent: positiveNumeric.optional().describe('Trailing stop percentage offset (alternative to auxPrice for TRAIL).'),
         tif: z.enum(['DAY', 'GTC', 'IOC', 'FOK', 'OPG', 'GTD']).default('DAY').describe('Time in force'),
         goodTillDate: z.string().optional().describe('Expiration datetime for GTD orders'),
         outsideRth: z.boolean().optional().describe('Allow execution outside regular trading hours'),
@@ -377,11 +416,11 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
         orderId: z.string().describe('Order ID to modify'),
-        totalQuantity: z.number().positive().optional().describe('New quantity'),
-        lmtPrice: z.number().positive().optional().describe('New limit price'),
-        auxPrice: z.number().positive().optional().describe('New stop trigger price or trailing offset (depends on order type)'),
-        trailStopPrice: z.number().positive().optional().describe('New initial trailing stop price'),
-        trailingPercent: z.number().positive().optional().describe('New trailing stop percentage'),
+        totalQuantity: positiveNumeric.optional().describe('New quantity. Accepts number or decimal string.'),
+        lmtPrice: positiveNumeric.optional().describe('New limit price. Accepts number or decimal string.'),
+        auxPrice: positiveNumeric.optional().describe('New stop trigger price or trailing offset (depends on order type).'),
+        trailStopPrice: positiveNumeric.optional().describe('New initial trailing stop price.'),
+        trailingPercent: positiveNumeric.optional().describe('New trailing stop percentage.'),
         orderType: z.enum(['MKT', 'LMT', 'STP', 'STP LMT', 'TRAIL', 'TRAIL LIMIT', 'MOC']).optional().describe('New order type'),
         tif: z.enum(['DAY', 'GTC', 'IOC', 'FOK', 'OPG', 'GTD']).optional().describe('New time in force'),
         goodTillDate: z.string().optional().describe('New expiration date'),

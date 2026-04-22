@@ -1,10 +1,10 @@
 {
   "name": "open-alice",
-  "version": "0.9.0-beta.12",
+  "version": "0.9.0-beta.13",
   "description": "File-based trading agent engine",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
     "dev:ui": "pnpm --filter open-alice-ui dev",
     "predev": "turbo run build --filter=@traderalice/opentypebb --filter=@traderalice/ibkr",
     "build": "turbo run build && tsup src/main.ts --format esm --dts",
@@ -21,7 +21,7 @@
     "securities",
     "file-driven"
   ],
-  "author": "Open Alice Contributors",
+  "author": "OpenAlice Contributors",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",

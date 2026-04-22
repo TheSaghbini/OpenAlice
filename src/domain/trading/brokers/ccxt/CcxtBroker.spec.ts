@@ -211,7 +211,7 @@ describe('CcxtBroker — placeOrder notional', () => {
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
-    order.cashQty = 500 // $500 worth of BTC
+    order.cashQty = new Decimal(500) // $500 worth of BTC
 
     const result = await acc.placeOrder(contract, order)
 
@@ -542,7 +542,7 @@ describe('CcxtBroker — placeOrder qty-based', () => {
     order.action = 'SELL'
     order.orderType = 'LMT'
     order.totalQuantity = new Decimal(1.0)
-    order.lmtPrice = 65000
+    order.lmtPrice = new Decimal(65000)
 
     const result = await acc.placeOrder(makeContract(), order)
     expect(result.success).toBe(true)
@@ -588,7 +588,7 @@ describe('CcxtBroker — modifyOrder', () => {
 
     const changes = new Order()
     changes.totalQuantity = new Decimal(0.75)
-    changes.lmtPrice = 62000
+    changes.lmtPrice = new Decimal(62000)
     changes.orderType = 'LMT'
 
     const result = await acc.modifyOrder('ord-100', changes)
@@ -649,7 +649,7 @@ describe('CcxtBroker — modifyOrder field forwarding', () => {
     })
     ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({ id: 'ord-300-edited', status: 'open' })
 
-    const changes: Partial<Order> = { auxPrice: 1850 }
+    const changes: Partial<Order> = { auxPrice: new Decimal(1850) }
 
     await acc.modifyOrder('ord-300', changes)
     const call = (acc as any).exchange.editOrder.mock.calls[0]
@@ -845,11 +845,11 @@ describe('CcxtBroker — getAccount', () => {
 
     const info = await acc.getAccount()
     // netLiq = free (8000) + position market values (1500 + 500 = 2000) = 10000
-    expect(info.netLiquidation).toBe(10000)
-    expect(info.totalCashValue).toBe(8000)
-    expect(info.initMarginReq).toBe(2000)
-    expect(info.unrealizedPnL).toBe(300)
-    expect(info.realizedPnL).toBe(150)
+    expect(info.netLiquidation).toBe('10000')
+    expect(info.totalCashValue).toBe('8000')
+    expect(info.initMarginReq).toBe('2000')
+    expect(info.unrealizedPnL).toBe('300')
+    expect(info.realizedPnL).toBe('150')
   })
 
   it('throws BrokerError when no API credentials', async () => {
@@ -887,8 +887,8 @@ describe('CcxtBroker — getPositions', () => {
     expect(positions[0].quantity).toBeInstanceOf(Decimal)
     expect(positions[0].quantity.toNumber()).toBe(2)
     expect(positions[0].side).toBe('long')
-    expect(positions[0].avgCost).toBe(58000)
-    expect(positions[0].marketPrice).toBe(60000)
+    expect(positions[0].avgCost).toBe('58000')
+    expect(positions[0].marketPrice).toBe('60000')
   })
 
   it('skips zero-size positions', async () => {
@@ -1216,8 +1216,8 @@ describe('CcxtBroker — getAccount spot balance', () => {
     ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([])
 
     const info = await acc.getAccount()
-    expect(info.totalCashValue).toBe(100)
-    expect(info.initMarginReq).toBe(50)
+    expect(info.totalCashValue).toBe('100')
+    expect(info.initMarginReq).toBe('50')
   })
 
   it('skips spot balance for derivatives-first exchanges (bybit override)', async () => {
@@ -1235,7 +1235,7 @@ describe('CcxtBroker — getAccount spot balance', () => {
 
     const info = await acc.getAccount()
     // Should use default balance (not spot) due to bybit override
-    expect(info.totalCashValue).toBe(5000)
+    expect(info.totalCashValue).toBe('5000')
     // fetchBalance should NOT have been called with { type: 'spot' }
     expect((acc as any).exchange.fetchBalance).toHaveBeenCalledWith()
     expect((acc as any).exchange.fetchBalance).not.toHaveBeenCalledWith({ type: 'spot' })
@@ -1255,7 +1255,7 @@ describe('CcxtBroker — getAccount spot balance', () => {
     const info = await acc.getAccount()
     // Cash = USDT + USDC + USD + DAI = 100 + 50 + 25 + 10 = 185
     // BTC is not counted as cash
-    expect(info.totalCashValue).toBe(185)
+    expect(info.totalCashValue).toBe('185')
   })
 
   it('handles fetchPositions failure gracefully for spot-only exchanges', async () => {
@@ -1270,8 +1270,8 @@ describe('CcxtBroker — getAccount spot balance', () => {
     ;(acc as any).exchange.fetchPositions = vi.fn().mockRejectedValue(new Error('not supported'))
 
     const info = await acc.getAccount()
-    expect(info.totalCashValue).toBe(10)
-    expect(info.unrealizedPnL).toBe(0)
+    expect(info.totalCashValue).toBe('10')
+    expect(info.unrealizedPnL).toBe('0')
   })
 
   it('includes spot holdings value in netLiquidation', async () => {
@@ -1295,9 +1295,9 @@ describe('CcxtBroker — getAccount spot balance', () => {
 
     const info = await acc.getAccount()
     // Cash = 100 USDT
-    expect(info.totalCashValue).toBe(100)
+    expect(info.totalCashValue).toBe('100')
     // netLiq = cash(100) + derivatives(0) + spotHoldings(1000*1 + 0.5*2000 = 2000) = 2100
-    expect(info.netLiquidation).toBe(2100)
+    expect(info.netLiquidation).toBe('2100')
   })
 
   it('excludes spot holdings from netLiquidation for skipSpotBalance exchanges', async () => {
@@ -1315,7 +1315,7 @@ describe('CcxtBroker — getAccount spot balance', () => {
 
     const info = await acc.getAccount()
     // bybit skips spot → no spot holdings added
-    expect(info.netLiquidation).toBe(100)
+    expect(info.netLiquidation).toBe('100')
   })
 
   it('treats FDUSD as a stablecoin (cash, not holding)', async () => {
@@ -1331,8 +1331,8 @@ describe('CcxtBroker — getAccount spot balance', () => {
 
     const info = await acc.getAccount()
     // FDUSD counted as cash (stablecoin)
-    expect(info.totalCashValue).toBe(500)
-    expect(info.netLiquidation).toBe(500)
+    expect(info.totalCashValue).toBe('500')
+    expect(info.netLiquidation).toBe('500')
   })
 })
 
@@ -1366,13 +1366,13 @@ describe('CcxtBroker — getPositions spot holdings', () => {
     expect(cro.side).toBe('long')
     expect(cro.quantity.toString()).toBe('100')
     expect(cro.marketPrice).toBe(0.08)
-    expect(cro.marketValue).toBeCloseTo(8)
+    expect(Number(cro.marketValue)).toBeCloseTo(8)
 
     const eth = positions.find(p => p.contract.symbol === 'ETH')!
     expect(eth).toBeDefined()
     expect(eth.quantity.toString()).toBe('0.5')
     expect(eth.marketPrice).toBe(2500)
-    expect(eth.marketValue).toBeCloseTo(1250)
+    expect(Number(eth.marketValue)).toBeCloseTo(1250)
   })
 
   it('skips stablecoin balances in spot position conversion', async () => {
@@ -1438,7 +1438,7 @@ describe('CcxtBroker — getPositions spot holdings', () => {
 
     const btc = positions.find(p => p.contract.symbol === 'BTC')!
     expect(btc.side).toBe('long')
-    expect(btc.marketPrice).toBe(60000)
+    expect(btc.marketPrice).toBe('60000')
 
     const cro = positions.find(p => p.contract.symbol === 'CRO')!
     expect(cro.side).toBe('long')

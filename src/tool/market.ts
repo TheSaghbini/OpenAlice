@@ -2,30 +2,30 @@
  * Market Search AI Tool
  *
  * marketSearchForResearch:
- *   统一的市场数据 symbol 搜索入口，跨 equity / crypto / currency 三个资产类别。
- *   - equity: 本地 SEC/TMX 缓存，正则匹配，零延迟
- *   - crypto: yfinance 在线模糊搜索
- *   - currency: yfinance 在线模糊搜索，只返回 XXXUSD 对
- *   返回值带 assetClass 字段归属。
+ *   统一的市场数据 symbol 搜索入口，跨 equity / crypto / currency / commodity 四个资产类别。
+ *   实际聚合逻辑位于 domain/market-data/aggregate-search，HTTP 层（/api/market/search）
+ *   也复用同一个函数——AI 与 UI 看到的是同一份结果。
  */
 
 import { tool } from 'ai'
 import { z } from 'zod'
-import type { SymbolIndex } from '@/domain/market-data/equity/symbol-index'
-import type { CryptoClientLike, CurrencyClientLike } from '@/domain/market-data/client/types'
+import {
+  aggregateSymbolSearch,
+  type MarketSearchDeps,
+} from '@/domain/market-data/aggregate-search.js'
 
-export function createMarketSearchTools(
-  symbolIndex: SymbolIndex,
-  cryptoClient: CryptoClientLike,
-  currencyClient: CurrencyClientLike,
-) {
+export function createMarketSearchTools(deps: MarketSearchDeps) {
   return {
     marketSearchForResearch: tool({
-      description: `Search for symbols across all asset classes (equities, crypto, currencies) for market data research.
+      description: `Search for symbols across all asset classes (equities, crypto, currencies, commodities) for market data research.
 
-Returns matching symbols with assetClass attribution ("equity", "crypto", or "currency").
+Returns matching symbols with assetClass attribution ("equity", "crypto", "currency", or "commodity").
 Equity results come from SEC/TMX listings (~13k US/CA stocks); crypto and currency results
-come from Yahoo Finance fuzzy search. Currency results are filtered to XXXUSD pairs only.
+come from Yahoo Finance fuzzy search; commodity results come from a canonical catalog (~25 items).
+Currency results are filtered to XXXUSD pairs only.
+
+For commodities, use the canonical id (e.g. "gold", "crude_oil", "copper") with calculateIndicator
+and other tools — provider-specific tickers (GC=F, GCUSD) are resolved automatically.
 
 If unsure about the symbol, use this to find the correct one for market data tools
 (equityGetProfile, equityGetFinancials, calculateIndicator, etc.).
@@ -35,30 +35,7 @@ This is NOT for trading — use searchContracts to find broker-tradeable contrac
         limit: z.number().int().positive().optional().describe('Max results per asset class (default: 20)'),
       }),
       execute: async ({ query, limit }) => {
-        const cap = limit ?? 20
-
-        // equity: 本地同步搜索
-        const equityResults = symbolIndex.search(query, cap).map((r) => ({ ...r, assetClass: 'equity' as const }))
-
-        // crypto + currency: yfinance 在线搜索，并行，容错
-        const [cryptoSettled, currencySettled] = await Promise.allSettled([
-          cryptoClient.search({ query, provider: 'yfinance' }),
-          currencyClient.search({ query, provider: 'yfinance' }),
-        ])
-
-        const cryptoResults = (cryptoSettled.status === 'fulfilled' ? cryptoSettled.value : []).map((r) => ({
-          ...r,
-          assetClass: 'crypto' as const,
-        }))
-
-        const currencyResults = (currencySettled.status === 'fulfilled' ? currencySettled.value : [])
-          .filter((r) => {
-            const sym = (r as Record<string, unknown>).symbol as string | undefined
-            return sym?.endsWith('USD')
-          })
-          .map((r) => ({ ...r, assetClass: 'currency' as const }))
-
-        const results = [...equityResults, ...cryptoResults, ...currencyResults]
+        const results = await aggregateSymbolSearch(deps, query, limit ?? 20)
         if (results.length === 0) {
           return { results: [], message: `No symbols matching "${query}". Try a different keyword.` }
         }

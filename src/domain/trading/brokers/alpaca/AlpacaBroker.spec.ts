@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Decimal from 'decimal.js'
-import { Contract, Order, UNSET_DOUBLE } from '@traderalice/ibkr'
+import { Contract, Order } from '@traderalice/ibkr'
 import { AlpacaBroker } from './AlpacaBroker.js'
 import '../../contract-ext.js'
 
@@ -159,7 +159,31 @@ describe('AlpacaBroker — precision', () => {
 
     await acc.placeOrder(contract, order)
     const passedQty = (acc as any).client.createOrder.mock.calls[0][0].qty
-    expect(passedQty).toBe(10.5)
+    // Alpaca REST receives qty as a decimal string — preserves precision
+    // across the wire and avoids IEEE 754 noise.
+    expect(passedQty).toBe('10.5')
+  })
+
+  it('placeOrder preserves precision across IEEE trap values', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    ;(acc as any).client = {
+      createOrder: vi.fn().mockResolvedValue({ id: 'ord-p', status: 'new' }),
+    }
+    const contract = new Contract()
+    contract.aliceId = 'alpaca-paper|AAPL'
+    contract.symbol = 'AAPL'
+    contract.secType = 'STK'
+    contract.exchange = 'NASDAQ'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'LMT'
+    order.totalQuantity = new Decimal('0.00001234')
+    order.lmtPrice = new Decimal('0.1').plus('0.2')
+
+    await acc.placeOrder(contract, order)
+    const payload = (acc as any).client.createOrder.mock.calls[0][0]
+    expect(payload.qty).toBe('0.00001234')
+    expect(payload.limit_price).toBe('0.3')
   })
 })
 
@@ -183,10 +207,10 @@ describe('AlpacaBroker — getPositions()', () => {
     expect(positions).toHaveLength(1)
     expect(positions[0].contract.symbol).toBe('AAPL')
     expect(positions[0].quantity.toNumber()).toBe(10)
-    expect(positions[0].avgCost).toBe(150)
-    expect(positions[0].marketPrice).toBe(160)
-    expect(positions[0].marketValue).toBe(1600)
-    expect(positions[0].unrealizedPnL).toBe(100)
+    expect(positions[0].avgCost).toBe('150')
+    expect(positions[0].marketPrice).toBe('160')
+    expect(positions[0].marketValue).toBe('1600')
+    expect(positions[0].unrealizedPnL).toBe('100')
     expect(positions[0].side).toBe('long')
   })
 })
@@ -235,17 +259,16 @@ describe('AlpacaBroker — modifyOrder()', () => {
 
     const changes = new Order()
     changes.totalQuantity = new Decimal(20)
-    changes.lmtPrice = 155.50
-    changes.auxPrice = UNSET_DOUBLE
-    changes.trailingPercent = UNSET_DOUBLE
+    changes.lmtPrice = new Decimal('155.50')
+    // auxPrice and trailingPercent left at their defaults (UNSET_DECIMAL)
     changes.tif = 'GTC'
 
     const result = await acc.modifyOrder('ord-1', changes)
     expect(result.success).toBe(true)
     expect(result.orderId).toBe('ord-modified')
     expect(replaceOrder).toHaveBeenCalledWith('ord-1', {
-      qty: 20,
-      limit_price: 155.50,
+      qty: '20',
+      limit_price: '155.5',
       time_in_force: 'gtc',
     })
   })
@@ -258,9 +281,7 @@ describe('AlpacaBroker — modifyOrder()', () => {
 
     const changes = new Order()
     changes.totalQuantity = new Decimal(5)
-    changes.lmtPrice = UNSET_DOUBLE
-    changes.auxPrice = UNSET_DOUBLE
-    changes.trailingPercent = UNSET_DOUBLE
+    // lmtPrice/auxPrice/trailingPercent left at UNSET_DECIMAL defaults
     changes.tif = ''
 
     const result = await acc.modifyOrder('ord-999', changes)
@@ -285,8 +306,8 @@ describe('AlpacaBroker — modifyOrder null-check', () => {
     await acc.modifyOrder('ord-1', changes)
     const patch = replaceOrder.mock.calls[0][1]
 
-    expect(patch.qty).toBe(20)
-    // These should NOT be in the patch — they were undefined, not UNSET_DOUBLE
+    expect(patch.qty).toBe('20')
+    // These should NOT be in the patch — they were undefined in changes
     expect(patch).not.toHaveProperty('limit_price')
     expect(patch).not.toHaveProperty('stop_price')
     expect(patch).not.toHaveProperty('trail')
@@ -297,12 +318,12 @@ describe('AlpacaBroker — modifyOrder null-check', () => {
     const replaceOrder = vi.fn().mockResolvedValue({ id: 'ord-mod', status: 'accepted' })
     ;(acc as any).client = { replaceOrder }
 
-    const changes: Partial<Order> = { lmtPrice: 155.50 }
+    const changes: Partial<Order> = { lmtPrice: new Decimal('155.50') }
 
     await acc.modifyOrder('ord-1', changes)
     const patch = replaceOrder.mock.calls[0][1]
 
-    expect(patch.limit_price).toBe(155.50)
+    expect(patch.limit_price).toBe('155.5')
     expect(patch).not.toHaveProperty('stop_price')
     expect(patch).not.toHaveProperty('trail')
   })
@@ -312,12 +333,12 @@ describe('AlpacaBroker — modifyOrder null-check', () => {
     const replaceOrder = vi.fn().mockResolvedValue({ id: 'ord-mod', status: 'accepted' })
     ;(acc as any).client = { replaceOrder }
 
-    const changes: Partial<Order> = { auxPrice: 140 }
+    const changes: Partial<Order> = { auxPrice: new Decimal(140) }
 
     await acc.modifyOrder('ord-1', changes)
     const patch = replaceOrder.mock.calls[0][1]
 
-    expect(patch.stop_price).toBe(140)
+    expect(patch.stop_price).toBe('140')
     expect(patch).not.toHaveProperty('limit_price')
   })
 })
@@ -406,7 +427,7 @@ describe('AlpacaBroker — closePosition()', () => {
         symbol: 'AAPL',
         side: 'sell',
         type: 'market',
-        qty: 3,
+        qty: '3',
       }),
     )
   })
@@ -446,10 +467,10 @@ describe('AlpacaBroker — getAccount()', () => {
     }
 
     const info = await acc.getAccount()
-    expect(info.netLiquidation).toBe(100000)
-    expect(info.totalCashValue).toBe(50000)
-    expect(info.buyingPower).toBe(200000)
-    expect(info.unrealizedPnL).toBe(350) // 100 + 250
+    expect(info.netLiquidation).toBe('100000')
+    expect(info.totalCashValue).toBe('50000')
+    expect(info.buyingPower).toBe('200000')
+    expect(info.unrealizedPnL).toBe('350') // 100 + 250
     expect(info.realizedPnL).toBeUndefined()
     expect(info.dayTradesRemaining).toBe(2) // 3 - 1
   })
@@ -472,7 +493,7 @@ describe('AlpacaBroker — getAccount() precision', () => {
 
     const info = await acc.getAccount()
     // 0.1 + 0.2 + 0.3 = 0.6 (with floats: 0.6000000000000001)
-    expect(info.unrealizedPnL).toBe(0.6)
+    expect(info.unrealizedPnL).toBe('0.6')
   })
 })
 

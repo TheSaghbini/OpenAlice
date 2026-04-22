@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { createEventLog, type EventLog } from '../../core/event-log.js'
+import { createListenerRegistry, type ListenerRegistry } from '../../core/listener-registry.js'
 import { createCronEngine, type CronEngine } from '../cron/engine.js'
 import {
   createHeartbeat,
@@ -55,6 +56,7 @@ function createMockEngine(response = CHAT_YES_RESPONSE) {
 
 describe('heartbeat', () => {
   let eventLog: EventLog
+  let listenerRegistry: ListenerRegistry
   let cronEngine: CronEngine
   let heartbeat: Heartbeat
   let mockEngine: ReturnType<typeof createMockEngine>
@@ -65,7 +67,9 @@ describe('heartbeat', () => {
     const logPath = tempPath('jsonl')
     const storePath = tempPath('json')
     eventLog = await createEventLog({ logPath })
-    cronEngine = createCronEngine({ eventLog, storePath })
+    listenerRegistry = createListenerRegistry(eventLog)
+    await listenerRegistry.start()  // Start registry so late registrations subscribe immediately
+    cronEngine = createCronEngine({ registry: listenerRegistry, storePath })
     await cronEngine.start()
 
     mockEngine = createMockEngine()
@@ -76,6 +80,7 @@ describe('heartbeat', () => {
   afterEach(async () => {
     heartbeat?.stop()
     cronEngine.stop()
+    await listenerRegistry.stop()
     await eventLog._resetForTest()
   })
 
@@ -85,7 +90,7 @@ describe('heartbeat', () => {
     it('should register a cron job on start', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -101,7 +106,7 @@ describe('heartbeat', () => {
     it('should be idempotent (update existing job, not create duplicate)', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ every: '30m' }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -112,7 +117,7 @@ describe('heartbeat', () => {
       // Start again with different interval
       heartbeat = createHeartbeat({
         config: makeConfig({ every: '1h' }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -127,7 +132,7 @@ describe('heartbeat', () => {
     it('should register disabled job when config.enabled is false', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -154,7 +159,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -183,7 +188,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -216,7 +221,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -236,7 +241,7 @@ describe('heartbeat', () => {
     it('should ignore non-heartbeat cron.fire events', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -266,7 +271,7 @@ describe('heartbeat', () => {
         config: makeConfig({
           activeHours: { start: '09:00', end: '22:00', timezone: 'local' },
         }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
         now: () => fakeNow,
@@ -299,7 +304,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -334,7 +339,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -360,7 +365,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -384,7 +389,7 @@ describe('heartbeat', () => {
     it('should stop listening after stop()', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig(),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -404,7 +409,7 @@ describe('heartbeat', () => {
     it('should enable a previously disabled heartbeat', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -422,7 +427,7 @@ describe('heartbeat', () => {
     it('should disable an enabled heartbeat', async () => {
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: true }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -441,7 +446,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })
@@ -461,7 +466,7 @@ describe('heartbeat', () => {
 
       heartbeat = createHeartbeat({
         config: makeConfig({ enabled: false }),
-        connectorCenter, cronEngine, eventLog,
+        connectorCenter, cronEngine, registry: listenerRegistry,
         agentCenter: mockEngine as any,
         session,
       })

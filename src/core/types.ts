@@ -2,6 +2,8 @@ import type { QueryExecutor } from '@traderalice/opentypebb'
 import type { AccountManager } from '../domain/trading/index.js'
 import type { FxService } from '../domain/trading/fx-service.js'
 import type { SnapshotService } from '../domain/trading/snapshot/index.js'
+import type { INewsProvider } from '../domain/news/types.js'
+import type { MarketSearchDeps } from '../domain/market-data/aggregate-search.js'
 import type { CronEngine } from '../task/cron/engine.js'
 import type { Heartbeat } from '../task/heartbeat/index.js'
 import type { Config, WebChannel } from './config.js'
@@ -10,6 +12,8 @@ import type { AgentCenter } from './agent-center.js'
 import type { EventLog } from './event-log.js'
 import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
+import type { ListenerRegistry } from './listener-registry.js'
+import type { EventBus } from './event-bus.js'
 
 export type { Config, WebChannel }
 
@@ -34,14 +38,22 @@ export interface EngineContext {
   heartbeat: Heartbeat
   cronEngine: CronEngine
   toolCenter: ToolCenter
+  listenerRegistry: ListenerRegistry
+  /** Ergonomic in-process producer facade. Use this to fire events from
+   *  plugins / hacks / extension code instead of plumbing eventLog. */
+  fire: EventBus
 
   // Market data
   bbEngine: QueryExecutor
+  /** Deps for cross-asset-class heuristic symbol search. Shared between the
+   *  AI tool (marketSearchForResearch) and the /api/market/search HTTP route. */
+  marketSearch: MarketSearchDeps
 
   // Trading (unified account model)
   accountManager: AccountManager
   fxService: FxService
   snapshotService?: SnapshotService
+  newsProvider?: INewsProvider
   /** Reconnect connector plugins (Telegram, MCP-Ask, etc.). */
   reconnectConnectors: () => Promise<ReconnectResult>
 }

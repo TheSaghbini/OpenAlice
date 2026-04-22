@@ -413,6 +413,61 @@ describe('event-log', () => {
     })
   })
 
+  // ==================== typed append validation ====================
+
+  describe('typed append validation', () => {
+    it('should accept valid payload for registered event type', async () => {
+      const entry = await log.append('cron.fire', {
+        jobId: 'j1', jobName: 'test', payload: 'hello',
+      })
+      expect(entry.type).toBe('cron.fire')
+      expect(entry.payload.jobId).toBe('j1')
+    })
+
+    it('should reject invalid payload for registered event type', async () => {
+      await expect(
+        log.append('cron.fire', { wrong: 'shape' } as never),
+      ).rejects.toThrow(/Invalid payload/)
+    })
+
+    it('should allow unregistered event types without validation', async () => {
+      const entry = await log.append('custom.unregistered', { anything: true })
+      expect(entry.type).toBe('custom.unregistered')
+    })
+  })
+
+  // ==================== causedBy ====================
+
+  describe('causedBy', () => {
+    it('should persist causedBy when provided via opts', async () => {
+      const entry = await log.append('a', { x: 1 }, { causedBy: 42 })
+      expect(entry.causedBy).toBe(42)
+    })
+
+    it('should omit causedBy when not provided', async () => {
+      const entry = await log.append('a', { x: 1 })
+      expect(entry.causedBy).toBeUndefined()
+      // Should not serialize as 'causedBy: undefined' either
+      expect('causedBy' in entry).toBe(false)
+    })
+
+    it('should survive disk round-trip', async () => {
+      const logPath = tempLogPath()
+      const log1 = await createEventLog({ logPath })
+      await log1.append('parent', {})
+      await log1.append('child', { note: 'caused by 1' }, { causedBy: 1 })
+      await log1.close()
+
+      const log2 = await createEventLog({ logPath })
+      const all = await log2.read()
+      expect(all).toHaveLength(2)
+      expect(all[0].causedBy).toBeUndefined()
+      expect(all[1].causedBy).toBe(1)
+
+      await log2._resetForTest()
+    })
+  })
+
   // ==================== _resetForTest ====================
 
   describe('_resetForTest', () => {

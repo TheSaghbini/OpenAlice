@@ -28,6 +28,9 @@ const ALIAS_DICT: Record<string, string> = {
   last_price: 'price',
   change_percent: 'changePercentage',
   prev_close: 'previousClose',
+  year_high: 'yearHigh',
+  year_low: 'yearLow',
+  market_cap: 'marketCap',
 }
 
 export const FMPEquityQuoteDataSchema = EquityQuoteDataSchema.extend({
